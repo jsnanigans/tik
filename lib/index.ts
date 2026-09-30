@@ -90,6 +90,8 @@ export {
   getFlowState,
   getFlowStateForBranch,
   getCachedIssuesRaw,
+  findIssuesContaining,
+  getTimelineDates,
   clearCache,
   rebuildFtsIndex,
   isValidKey,

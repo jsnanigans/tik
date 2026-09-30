@@ -16,6 +16,7 @@ export type CachedIssue = {
 
 export type CacheSearchOpts = {
   text?: string;
+  contains?: string; // Case-insensitive substring match over summary, description, AC and TI (unranked)
   fuzzy?: boolean; // Enable fuzzy matching (typo tolerance, subsequence matching)
   minScore?: number; // Minimum fuzzy score threshold (default: 50)
   project?: string[];
@@ -38,6 +39,8 @@ const KNOWN_PROJECTS = [
   ...new Set([localConfig.defaultProject, ...localConfig.syncProjects, ...Object.keys(localConfig.projectAliases)]),
 ].filter(Boolean);
 const KEY_PATTERN = /^([A-Z]+)-(\d+)$/;
+const SEARCHABLE_TEXT_SQL =
+  "i.summary || ' ' || coalesce(i.description, '') || ' ' || coalesce(i.acceptance_criteria, '') || ' ' || coalesce(i.testing_instructions, '')";
 const TEXT_FIELDS = ["summary", "description", "acceptance_criteria", "testing_instructions"];
 const SCHEMA_VERSION = 13; // Bump when schema changes
 const DEFAULT_PROJECT = localConfig.defaultProject;
@@ -832,6 +835,11 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     useFtsRanking = true;
   }
 
+  if (opts.contains) {
+    conditions.push(`instr(lower(${SEARCHABLE_TEXT_SQL}), lower(?)) > 0`);
+    params.push(opts.contains);
+  }
+
   // Project filter
   if (opts.project && opts.project.length > 0) {
     const placeholders = opts.project.map(() => "?").join(", ");
@@ -1038,6 +1046,32 @@ export async function searchCache(opts: CacheSearchOpts, retried = false): Promi
 
 export async function searchCacheWithScores(opts: CacheSearchOpts): Promise<SearchCacheResult> {
   return searchCacheInternal(opts);
+}
+
+export type ContainsHit = {
+  key: string;
+  summary: string;
+  status: string;
+  statusCategory: string | null;
+  doneAt: string | null;
+};
+
+export function findIssuesContaining(tokens: string[]): Map<string, ContainsHit[]> {
+  const rows = getDb().query(
+    `SELECT i.key, i.summary, i.status, i.status_category, i.done_at, ${SEARCHABLE_TEXT_SQL} AS text
+     FROM issues i ORDER BY i.updated DESC`
+  ).all() as Array<{ key: string; summary: string; status: string; status_category: string | null; done_at: string | null; text: string }>;
+
+  const needles = tokens.map(token => ({ token, needle: token.toLowerCase(), hits: [] as ContainsHit[] }));
+  for (const row of rows) {
+    const text = row.text.toLowerCase();
+    for (const { needle, hits } of needles) {
+      if (text.includes(needle)) {
+        hits.push({ key: row.key, summary: row.summary, status: row.status, statusCategory: row.status_category, doneAt: row.done_at });
+      }
+    }
+  }
+  return new Map(needles.map(({ token, hits }) => [token, hits]));
 }
 
 export async function getCachedIssue(key: string): Promise<CachedIssue | null> {

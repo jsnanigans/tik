@@ -86,6 +86,8 @@ tik search "login bug"  # Text search (fuzzy, summary + description)
   --no-fuzzy            # Disable fuzzy matching (exact match only)
   --no-semantic         # Disable semantic/vector search (keyword only)
   --min-score 50        # Minimum fuzzy score threshold (default: 50)
+  --contains "text"     # Exact case-insensitive substring over summary/description/AC/TI (unranked, unlimited unless -m)
+  --contains-any FILE   # One token per line (--contains-any=- for stdin); JSON {token: [{key, summary, status, statusCategory, doneAt}]}
 ```
 
 ### Triage

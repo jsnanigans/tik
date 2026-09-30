@@ -51,6 +51,8 @@ import {
   getUserAccountId,
   searchCache,
   getCachedIssuesRaw,
+  findIssuesContaining,
+  getTimelineDates,
   type CacheSearchOpts,
   resolveKey,
   isValidKey,
@@ -190,6 +192,7 @@ function resolveTeamName(teamId: string | undefined): string | null {
  */
 function buildIssueJsonFields(data: IssueData): Record<string, unknown> {
   return {
+    statusCategory: data.statusCategory,
     sprint: data.sprintName,
     storyPoints: data.storyPoints,
     epicKey: data.epicKey,
@@ -703,10 +706,11 @@ async function formatIssues(result: unknown, title?: string, grouped: boolean = 
       } else {
         const rawIssues = ((result as { issues?: unknown[] }).issues || []);
         const byKey = new Map(issues.map(d => [d.key, d]));
+        const doneAtByKey = new Map(getTimelineDates(issues.map(d => d.key)).map(d => [d.key, d.doneAt]));
         const augmented = rawIssues.map(raw => {
           const key = (raw as { key?: string }).key;
           const data = key ? byKey.get(key) : undefined;
-          return data ? { ...(raw as Record<string, unknown>), ...buildIssueJsonFields(data) } : raw;
+          return data ? { ...(raw as Record<string, unknown>), ...buildIssueJsonFields(data), doneAt: doneAtByKey.get(data.key) ?? null } : raw;
         });
         out(JSON.stringify({ ...(result as object), issues: augmented }, null, 2));
       }
@@ -1516,6 +1520,10 @@ async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials
     opts.text = args.summary;
   }
 
+  if (typeof args.contains === "string") {
+    opts.contains = args.contains;
+  }
+
   // Fuzzy search mode (enabled by default, can be disabled with --no-fuzzy)
   opts.fuzzy = args["no-fuzzy"] ? false : true;
   opts.minScore = typeof args["min-score"] === "string" ? parseInt(args["min-score"], 10) : 30;
@@ -1635,9 +1643,16 @@ async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials
   opts.orderDir = args.asc ? "asc" : "desc";
 
   // Limit
-  opts.limit = typeof args.m === "string" ? parseInt(args.m, 10) || defaultLimit : defaultLimit;
+  const fallbackLimit = opts.contains ? Number.MAX_SAFE_INTEGER : defaultLimit;
+  opts.limit = typeof args.m === "string" ? parseInt(args.m, 10) || fallbackLimit : fallbackLimit;
 
   return opts;
+}
+
+async function runContainsAny(source: string): Promise<void> {
+  const input = source === "-" ? await Bun.stdin.text() : await Bun.file(source).text();
+  const tokens = [...new Set(input.split("\n").map(line => line.trim()).filter(Boolean))];
+  out(JSON.stringify(Object.fromEntries(findIssuesContaining(tokens)), null, 2));
 }
 
 async function runLocalSearch(args: Record<string, unknown>, creds: Credentials, localOnly = true): Promise<void> {
@@ -3255,6 +3270,8 @@ Search with text query, filters, or raw JQL.
 # Text search (positional argument, fuzzy matching):
 tik search "login bug"                     # Fuzzy search in summary + description
 tik search "auth" -p PROJ                 # Text + project filter
+tik search --contains "BACKEND-PROD-822"   # Exact substring match, unranked, unlimited unless -m
+tik search --contains-any ids.txt          # One token per line (--contains-any=- for stdin); JSON {token: [{key, summary, status, statusCategory, doneAt}]}
 
 # Using filters (recommended for agents):
 tik search -p PROJ                        # Project filter
@@ -3734,6 +3751,8 @@ const searchCommand = defineCommand({
     // Text search
     summary: { type: "string", description: "Search summary/title only, excludes description" },
     jql: { type: "string", description: "Raw JQL query — bypasses all filters and searches Jira API directly" },
+    contains: { type: "string", description: "Exact case-insensitive substring match over summary, description, AC and TI — unranked, unlimited unless -m is given" },
+    "contains-any": { type: "string", description: "File path (or --contains-any=- for stdin) with one token per line — prints JSON mapping each token to its matching tickets" },
     // Basic filters
     p: { type: "string", description: "Filter by project — comma-separated for multiple (e.g., -p PROJ,PORTAL,API)" },
     t: { type: "string", alias: "type", description: "Filter by issue type — comma-separated (e.g., -t Bug,Task,Story,Spike)" },
@@ -3795,6 +3814,7 @@ const searchCommand = defineCommand({
 
     // Require at least one filter
     const hasFilters = typeof args.q === "string" || typeof args.summary === "string" ||
+      typeof args.contains === "string" || typeof args["contains-any"] === "string" ||
       typeof args.p === "string" || typeof args.t === "string" ||
       typeof args.s === "string" || typeof args.a === "string" ||
       typeof args.l === "string" || typeof args.priority === "string" ||
@@ -3810,6 +3830,10 @@ const searchCommand = defineCommand({
     }
 
     await ensureCacheOrFresh(creds, args);
+    if (typeof args["contains-any"] === "string") {
+      await runContainsAny(args["contains-any"]);
+      return;
+    }
     await runLocalSearch(args, creds);
   },
 });
