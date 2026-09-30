@@ -38,6 +38,7 @@ const KNOWN_PROJECTS = [
   ...new Set([localConfig.defaultProject, ...localConfig.syncProjects, ...Object.keys(localConfig.projectAliases)]),
 ].filter(Boolean);
 const KEY_PATTERN = /^([A-Z]+)-(\d+)$/;
+const TEXT_FIELDS = ["summary", "description", "acceptance_criteria", "testing_instructions"];
 const SCHEMA_VERSION = 13; // Bump when schema changes
 const DEFAULT_PROJECT = localConfig.defaultProject;
 const PROJECT_ALIASES = localConfig.projectAliases;
@@ -255,6 +256,10 @@ function seedUsersFromConfig(database: Database): void {
   const users = localConfig.users;
   if (!users?.length) return;
 
+  const snapshot = JSON.stringify([users, localConfig.myEmail]);
+  const seeded = database.query("SELECT value FROM sync_meta WHERE key = 'users_snapshot'").get() as { value: string } | null;
+  if (seeded?.value === snapshot) return;
+
   const stmt = database.prepare(`
     INSERT INTO users (account_id, display_name, email, active, is_main_account, role, team, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -290,6 +295,8 @@ function seedUsersFromConfig(database: Database): void {
       );
     }
   }
+
+  database.run("INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('users_snapshot', ?)", [snapshot]);
 }
 
 function getDb(): Database {
@@ -302,6 +309,7 @@ function getDb(): Database {
     }
 
     db = new Database(getDbPath());
+    db.exec("PRAGMA busy_timeout = 5000");
     db.exec(SCHEMA);
     migrateIfNeeded(db);
     seedUsersFromConfig(db);
@@ -946,6 +954,7 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     }
 
     const searchResults = index.search(fuzzyQuery, {
+      fields: parsePartialKey(fuzzyQuery) ? undefined : TEXT_FIELDS,
       filter: filterKeySet ? (result) => filterKeySet!.has(result.id as string) : undefined,
     });
 

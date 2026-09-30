@@ -1,6 +1,6 @@
 import MiniSearch, { type Options as MiniSearchOptions } from "minisearch";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from "fs";
 import { getCacheDir } from "./util";
 import { stripMarkdown } from "./embeddings";
 
@@ -110,7 +110,9 @@ export function buildSearchIndex(): MiniSearch {
     version: INDEX_VERSION,
     index: JSON.stringify(index),
   };
-  writeFileSync(getIndexPath(), JSON.stringify(envelope));
+  const tmpPath = `${getIndexPath()}.${process.pid}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(envelope));
+  renameSync(tmpPath, getIndexPath());
 
   cachedIndex = index;
   return index;
