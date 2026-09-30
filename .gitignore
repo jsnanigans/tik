@@ -4,3 +4,4 @@ tik
 config.local.json
 completions
 claude_skill
+*.bun-build
