@@ -1,0 +1,31 @@
+{
+  "name": "tik-cli",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jsnanigans/tik.git"
+  },
+  "type": "module",
+  "bin": {
+    "tik": "./main.ts"
+  },
+  "scripts": {
+    "start": "bun run main.ts",
+    "build": "bun build main.ts --compile --outfile tik",
+    "link": "bun run build && bun link"
+  },
+  "dependencies": {
+    "citty": "^0.1.6",
+    "ink": "^5.0.0",
+    "marked": "^17.0.2",
+    "marked-terminal": "^7.3.0",
+    "minisearch": "^7.2.0",
+    "react": "^18.3.1",
+    "react-devtools-core": "^4.28.5"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.3.3"
+  }
+}

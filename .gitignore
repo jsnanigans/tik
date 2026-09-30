@@ -1,0 +1,6 @@
+node_modules
+tik
+.claude
+config.local.json
+completions
+claude_skill

@@ -1,0 +1,65 @@
+{
+  "jiraBase": "https://YOUR-ORG.atlassian.net",
+  "myTeamId": "YOUR-TEAM-UUID",
+  "myBoardId": 0,
+  "inProgressTransitionId": "YOUR-TRANSITION-ID",
+  "reviewTransitionId": "YOUR-REVIEW-TRANSITION-ID",
+  "defaultProject": "PROJ",
+  "syncProjects": ["PROJ"],
+  "teamName": "MY TEAM",
+  "teamBoardMap": {
+    "MY TEAM": 0
+  },
+  "teamIdNames": {
+    "YOUR-TEAM-UUID": "my-team"
+  },
+  "githubRepos": {
+    "PROJ": "your-org/your-repo"
+  },
+  "prBaseBranches": {
+    "API": "main"
+  },
+  "projectAliases": {
+    "PROJ": ["P", "MAIN"]
+  },
+  "timelineFirstProject": "PROJ",
+  "statuses": {
+    "inProgress": ["In Progress"],
+    "review": ["In Review"],
+    "ready": ["Ready for Release"],
+    "todo": { "Ready": ["Ready for Dev"], "Backlog": ["Backlog"] },
+    "done": ["Done", "Closed"],
+    "reviewName": "In Review",
+    "timeline": {
+      "started": ["In Progress"],
+      "testing": ["In Review"],
+      "completed": ["Ready for Release"]
+    }
+  },
+  "customFields": {
+    "team": "customfield_XXXXX",
+    "sprint": "customfield_XXXXX",
+    "storyPoints": "customfield_XXXXX",
+    "epicLink": "customfield_XXXXX",
+    "acceptanceCriteria": "customfield_XXXXX",
+    "testingInstructions": "customfield_XXXXX"
+  },
+  "botAuthors": ["Continuous Integration", "Automation for Jira"],
+  "myEmail": "you@your-org.com",
+  "confluence": {
+    "defaultSpace": "ENG",
+    "syncSpaces": ["ENG"]
+  },
+  "users": [
+    {
+      "accountId": "YOUR-ACCOUNT-ID",
+      "displayName": "Your Name",
+      "email": "you@your-org.com",
+      "active": true,
+      "isMainAccount": true,
+      "role": null,
+      "team": null,
+      "notes": null
+    }
+  ]
+}
