@@ -2,6 +2,7 @@
 import React from "react";
 import { defineCommand, runMain } from "citty";
 import packageJson from "./package.json";
+import agentGuide from "./AGENTS.md" with { type: "text" };
 import {
   C,
   truncate,
@@ -2962,10 +2963,9 @@ async function cmdEdit(creds: Credentials, key: string, options: {
 
   if (options.priority) {
     const priorityId = PriorityMap[options.priority.toLowerCase()];
-    if (priorityId) {
-      fields.priority = { id: priorityId };
-      changes.push(`priority → ${PriorityNames[parseInt(priorityId)]}`);
-    }
+    if (!priorityId) emitError("invalid_priority", `Invalid priority '${options.priority}' (use 1-5 or a name)`);
+    fields.priority = { id: priorityId };
+    changes.push(`priority → ${PriorityNames[parseInt(priorityId)]}`);
   }
 
   if (options.team) {
@@ -2980,28 +2980,25 @@ async function cmdEdit(creds: Credentials, key: string, options: {
         `/rest/agile/1.0/board/${Config.myBoardId}/sprint?state=active`
       )) as { values?: { id: number; name: string }[] };
       const activeSprint = sprintResp.values?.[0];
-      if (activeSprint) {
-        fields[requireCustomField("sprint")] = activeSprint.id;
-        changes.push(`sprint → ${activeSprint.name}`);
-      }
+      if (!activeSprint) emitError("no_active_sprint", "No active sprint found on your board");
+      fields[requireCustomField("sprint")] = activeSprint.id;
+      changes.push(`sprint → ${activeSprint.name}`);
     } else if (options.sprint === "none" || options.sprint === "-") {
       fields[requireCustomField("sprint")] = null;
       changes.push("sprint → removed");
     } else {
       const sprintId = parseInt(options.sprint, 10);
-      if (!isNaN(sprintId)) {
-        fields[requireCustomField("sprint")] = sprintId;
-        changes.push(`sprint → ${sprintId}`);
-      }
+      if (isNaN(sprintId)) emitError("invalid_sprint", `Invalid sprint '${options.sprint}' (use a sprint ID or "none")`);
+      fields[requireCustomField("sprint")] = sprintId;
+      changes.push(`sprint → ${sprintId}`);
     }
   }
 
   if (options.points) {
     const pts = parseFloat(options.points);
-    if (!isNaN(pts)) {
-      fields[requireCustomField("storyPoints")] = pts;
-      changes.push(`points → ${pts}`);
-    }
+    if (isNaN(pts)) emitError("invalid_points", `Invalid points '${options.points}'`);
+    fields[requireCustomField("storyPoints")] = pts;
+    changes.push(`points → ${pts}`);
   }
 
   if (options.acceptanceCriteria) {
@@ -3046,7 +3043,7 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     out(`  --parent          Parent ticket key, or "none" to remove`);
     out(`  -p, --priority    Priority (1-5 or name)`);
     out(`  -e, --team        Assign to your team (myTeamId)`);
-    out(`  -S                Add to current sprint`);
+    out(`  --current-sprint  Add to current sprint`);
     out(`  --sprint <id>     Add to specific sprint, or "none" to remove`);
     out(`  --points          Story points`);
     out(`  --ac              Acceptance criteria (or path to .md file)`);
@@ -3173,406 +3170,7 @@ async function cmdTransition(creds: Credentials, args: string[]): Promise<void> 
 }
 
 async function printAgentHelp(): Promise<void> {
-  const help = `
-# Tik CLI - AI Agent Reference
-
-## Overview
-CLI tool for Jira operations. Supports viewing, creating, editing tickets, managing comments, linking tickets, and transitioning statuses.
-
-## Global Options
---json          Output as JSON (structured data, best for parsing)
---plain         Output as tab-separated values (KEY, STATUS, SUMMARY, ASSIGNEE, POINTS)
---pr            Include GitHub PR status for issues
---refresh-auth  Force credential refresh from 1Password
---agent-help    Show this AI agent reference
-
-## Commands
-
-### sprint (default)
-Show current sprint issues assigned to me.
-
-\`\`\`bash
-tik                    # My sprint issues (default)
-tik sprint             # Same as above
-tik sprint -a          # All team issues (not just mine)
-tik sprint -e          # Expand done section (show all completed tickets)
-tik sprint -i          # Sprint info only (no issues)
-tik sprint -g          # Show sprint goals
-tik sprint --json      # Sprint + issues as JSON
-\`\`\`
-
-### view [KEY]
-View single ticket details. If no KEY provided, extracts from current git branch.
-
-\`\`\`bash
-tik view PROJ-123
-tik view               # Uses ticket from git branch (e.g., feature/PROJ-123-foo)
-tik view PROJ-123 -d     # Show description
-tik view PROJ-123 --ac   # Show acceptance criteria
-tik view PROJ-123 --ti   # Show testing instructions
-tik view PROJ-123 -A     # Show description, AC, and TI (--all)
-tik view PROJ-123 -d --ac  # Mix and match sections
-tik view PROJ-123 --json
-tik view PROJ-123 --pr   # Include PR info
-\`\`\`
-
-### history [KEY]
-Show full changelog timeline for a ticket. Fetches all field changes from Jira and displays them chronologically.
-
-\`\`\`bash
-tik history PROJ-123
-tik history              # Uses ticket from git branch
-tik history PROJ-123 -F # Sync before showing
-tik history PROJ-123 --json
-tik history PROJ-123 --plain
-\`\`\`
-
-### export [KEY]
-Write a complete local copy of a ticket as markdown: field table, links, attachments,
-description, AC, TI, comments and full changelog. Fetches every field live from Jira
-(the sync cache only holds a subset), so it works without syncing first.
-
-\`\`\`bash
-tik export PROJ-123                       # ./PROJ-123/ticket.md + ./PROJ-123/attachments/
-tik export                                 # Uses ticket from git branch
-tik export PROJ-123 --out plans/PROJ-123 # Into a directory (writes ticket.md inside)
-tik export PROJ-123 --out notes/copy.md   # Into a specific file
-tik export PROJ-123 --stdout              # Print markdown, write nothing
-tik export PROJ-123 --no-history --no-attachments
-tik export PROJ-123 --bots                # Keep automated comments in full
-tik export PROJ-123 --cached              # Build from the local cache instead of Jira
-\`\`\`
-
-Automated (CI/bot) comments are collapsed to one line each by default; configure which
-authors count as bots with \`botAuthors\` in config.local.json.
-
-### mine
-All my open tickets (not filtered to current sprint).
-
-\`\`\`bash
-tik mine
-tik mine --json
-\`\`\`
-
-### standup
-Summarize last 30 hours of my Jira + GitHub account activity (commits + PRs) and match Git activity to tickets.
-
-\`\`\`bash
-tik standup
-tik standup --hours 48
-tik standup --json
-\`\`\`
-
-### search [query]
-Search with text query, filters, or raw JQL.
-
-\`\`\`bash
-# Text search (positional argument, fuzzy matching):
-tik search "login bug"                     # Fuzzy search in summary + description
-tik search "auth" -p PROJ                 # Text + project filter
-tik search --contains "BACKEND-PROD-822"   # Exact substring match, unranked, unlimited unless -m
-tik search --contains-any ids.txt          # One token per line (--contains-any=- for stdin); JSON {token: [{key, summary, status, statusCategory, doneAt}]}
-
-# Using filters (recommended for agents):
-tik search -p PROJ                        # Project filter
-tik search -t Bug                          # Type: Bug, Task, Story, Spike
-tik search -s "In Progress"                # Status filter (quote multi-word)
-tik search -a me                           # Assignee: "me" or account ID
-tik search -p PROJ -t Bug -s "In Progress" -a me   # Combined filters
-tik search -m 100                          # Max results (default: 50)
-
-# Using raw JQL (bypasses all filters, queries Jira API directly):
-tik search --jql "project=PROJ AND status='In Progress' ORDER BY updated DESC"
-\`\`\`
-
-Valid projects: ${localConfig.syncProjects.join(", ")}
-Valid types: Bug, Task, Story, Spike, Epic
-Statuses are those of your Jira workflow; "tik transition KEY" lists the valid ones
-
-### prio
-High priority tickets (P1/P2) in current sprint.
-
-\`\`\`bash
-tik prio
-tik prio --json
-\`\`\`
-
-### create "Summary"
-Create a new ticket.
-
-\`\`\`bash
-# Minimal:
-tik create "Fix login button alignment"
-
-# Full options:
-tik create "Fix login button" \\
-  -p PROJ              \\  # Project (default: ${localConfig.defaultProject})
-  -t Bug                \\  # Type (default: Task)
-  -d "Full description" \\  # Description (markdown supported)
-  -a                    \\  # Assign to me
-  -e                    \\  # Add your team (myTeamId)
-  -S                    \\  # Add to current sprint
-  --sprint 123          \\  # Or specific sprint ID
-  --priority 2          \\  # 1=Highest, 2=High, 3=Medium, 4=Low, 5=Lowest
-  --points 3            \\  # Story points
-  --ac "- Works on mobile" \\ # Acceptance criteria (markdown)
-  --ti "1. Test login flow"  \\ # Testing instructions (markdown)
-  -i                       # Move to In Progress immediately
-
-# Read from files:
-tik create ./title.txt -d ./description.md --ac ./criteria.md --ti ./testing.md
-\`\`\`
-
-### edit [KEY]
-Edit ticket fields. KEY from git branch if not provided.
-
-\`\`\`bash
-tik edit PROJ-123 -s "New title"
-tik edit PROJ-123 -d "New description with **markdown**"
-tik edit PROJ-123 -a me           # Assign to me
-tik edit PROJ-123 -a none         # Unassign
-tik edit PROJ-123 -p 2            # Set priority (1-5 or name)
-tik edit PROJ-123 -e              # Assign your team (myTeamId)
-tik edit PROJ-123 -S              # Add to current sprint
-tik edit PROJ-123 --sprint 123    # Add to specific sprint
-tik edit PROJ-123 --sprint none   # Remove from sprint
-tik edit PROJ-123 --points 5      # Set story points
-tik edit PROJ-123 --ac "criteria" # Set acceptance criteria
-tik edit PROJ-123 --ti "testing"  # Set testing instructions
-tik edit PROJ-123 --labels "tech-debt,urgent"  # Set labels
-tik edit PROJ-123 --add-label "urgent"    # Add a label
-tik edit PROJ-123 --remove-label "urgent" # Remove a label
-
-# Read from files:
-tik edit PROJ-123 -d ./spec.md --ac ./criteria.md --ti ./testing.md
-\`\`\`
-
-### start [KEY]
-Transition ticket to "In Progress".
-
-\`\`\`bash
-tik start PROJ-123
-tik start              # Uses ticket from git branch
-\`\`\`
-
-### review [KEY]
-Transition ticket to your review status.
-
-\`\`\`bash
-tik review PROJ-123
-tik review             # Uses ticket from git branch
-tik review --gate-ci   # Only if PR is open + approved + checks passing
-\`\`\`
-
-### pr [KEY]
-Show PR status (state, review, CI) for a ticket or current branch.
-
-\`\`\`bash
-tik pr PROJ-123
-tik pr                 # Uses ticket from git branch
-\`\`\`
-
-### transition [KEY] [STATUS]
-List available transitions or transition to specific status.
-
-\`\`\`bash
-tik transition PROJ-123           # List available transitions
-tik transition PROJ-123 "Done"    # Transition by name
-tik transition PROJ-123 11       # Transition by ID
-\`\`\`
-
-### comment [KEY] "Message"
-Add a comment to a ticket.
-
-\`\`\`bash
-tik comment PROJ-123 "This is my comment"
-tik comment PROJ-123 -m ./notes.md   # Comment from file
-tik comment "Comment on branch ticket" # Uses ticket from git branch
-\`\`\`
-
-### comments [KEY]
-View comments on a ticket. Bodies are capped at 15 lines in the boxed view — use
-\`--full\` or \`--md\` to read a long comment (e.g. a test plan) in its entirety.
-
-\`\`\`bash
-tik comments PROJ-123           # All comments (bodies capped at 15 lines)
-tik comments PROJ-123 -n 5      # Last 5 comments
-tik comments                     # Comments on branch ticket
-tik comments PROJ-123 --full    # No line cap (-f)
-tik comments PROJ-123 --md      # Raw markdown bodies, pipe/file friendly
-tik comments PROJ-123 --no-bots # Hide CI/automation comments
-tik comments PROJ-123 --bots    # Only CI/automation comments
-tik comments PROJ-123 --author sophie
-tik comments PROJ-123 --json    # Parsed comments (respects the filters above)
-tik comments PROJ-123 --json --raw  # Unparsed Jira response (ADF bodies)
-\`\`\`
-
-### get [KEY] REFS
-Download attachments by id, filename, or \`tikmedia:\` token. Defaults to a temp dir with
-\`<id>-\` prefixed names; \`--out\` saves to a directory of your choice under the plain filename.
-
-\`\`\`bash
-tik get PROJ-123 shot.png                  # → $TMPDIR/tik-attachments/10234-shot.png
-tik get 10234                               # By attachment id
-tik get PROJ-123 a.png,b.png --out ./docs  # → ./docs/a.png, ./docs/b.png
-\`\`\`
-
-### link KEY --type TARGET
-Link two tickets together.
-
-\`\`\`bash
-tik link PROJ-123 --blocks PROJ-456       # This blocks that
-tik link PROJ-123 --is-blocked-by API-789 # This is blocked by that
-tik link PROJ-123 --relates-to PROJ-456   # Relates to
-tik link PROJ-123 --duplicates PROJ-456   # This duplicates that
-\`\`\`
-
-### links [KEY]
-View links on a ticket.
-
-\`\`\`bash
-tik links PROJ-123
-tik links              # Links on branch ticket
-tik links --json
-\`\`\`
-
-### open [KEY]
-Open ticket in browser.
-
-\`\`\`bash
-tik open PROJ-123
-tik open               # Uses ticket from git branch
-\`\`\`
-
-### branch
-View ticket from current git branch name.
-
-\`\`\`bash
-tik branch
-\`\`\`
-
-## Output Formats
-
-### --json
-Returns structured JSON. For search/list commands:
-\`\`\`json
-{"issues": [{"key": "PROJ-123", "fields": {...}}]}
-\`\`\`
-
-### --plain
-Returns tab-separated values (KEY, STATUS, SUMMARY, ASSIGNEE, POINTS):
-\`\`\`
-PROJ-123	In Progress	Fix login bug	John Doe	3
-PROJ-124	Done	Add feature	Jane Doe	5
-\`\`\`
-
-## Markdown Support
-Fields \`-d\` (description), \`--ac\` (acceptance criteria), and \`--ti\` (testing instructions) support full markdown:
-- Headers: # H1, ## H2, ### H3
-- Bold: **text**, Italic: *text*, Strikethrough: ~~text~~
-- Code: \\\`inline\\\` and \\\`\\\`\\\`lang code blocks
-- Links: [text](url)
-- Lists: - bullet, 1. numbered
-- Blockquotes: > quote
-- Tables: | col | col |
-
-## File Input
-Pass file paths to read content from files. Auto-detected by path patterns:
-- Paths with / or ./ or ~/
-- Extensions: .md, .txt, .markdown
-
-## Common Workflows
-
-### Start working on a ticket:
-\`\`\`bash
-tik start PROJ-123
-\`\`\`
-
-### Create ticket and start working:
-\`\`\`bash
-tik create "Fix bug" -a -S -i
-\`\`\`
-
-### Create ticket, branch, and switch worktree:
-\`\`\`bash
-tik flow start "Fix bug"
-tik flow start "PORTAL bug" -p PORTAL
-tik flow start PROJ-123 -w quick
-\`\`\`
-
-### Push branch and create PR:
-\`\`\`bash
-tik flow pr --open
-\`\`\`
-
-### Move to review when PR is ready:
-\`\`\`bash
-tik review   # Uses current branch ticket
-\`\`\`
-
-### Check sprint status:
-\`\`\`bash
-tik --json | jq '.issues[] | {key, status: .fields.status.name}'
-\`\`\`
-
-### Find unassigned bugs:
-\`\`\`bash
-tik search -p PROJ -t Bug -a none --json
-\`\`\`
-
-### View ticket with full details:
-\`\`\`bash
-tik view PROJ-123 --full   # Shows description, AC, testing instructions
-\`\`\`
-
-### Add a comment with context:
-\`\`\`bash
-tik comment PROJ-123 "Fixed in PR #456. Ready for review."
-\`\`\`
-
-### Check recent comments:
-\`\`\`bash
-tik comments PROJ-123 -n 3   # Last 3 comments
-\`\`\`
-
-### Link related tickets:
-\`\`\`bash
-tik link PROJ-123 --blocks PROJ-456
-tik link PROJ-123 --relates-to API-789
-\`\`\`
-
-### Add labels to categorize:
-\`\`\`bash
-tik edit PROJ-123 --add-label "tech-debt"
-tik edit PROJ-123 --labels "urgent,frontend"
-\`\`\`
-
-### Get plain output for scripting:
-\`\`\`bash
-tik mine --plain | cut -f1   # Just ticket keys
-tik mine --plain | awk -F'\\t' '{print $1, $2}'  # Key and status
-\`\`\`
-
-## Notes for AI Agents
-- Use --json for reliable parsing of output
-- Use --plain for tab-separated output (parseable with cut/awk)
-- Ticket keys follow pattern: PROJECT-NUMBER (e.g., PROJ-123, API-456)
-- When no KEY is provided, most commands extract it from git branch name
-- Sprint commands operate on the active sprint only
-- Priority values: 1=Highest, 2=High, 3=Medium, 4=Low, 5=Lowest
-- Labels are comma-separated when setting multiple: --labels "a,b,c"
-- Rich text fields (description, AC, TI) support full markdown
-- Comments support markdown and can be read from files with -m flag
-- Link types: blocks, is-blocked-by, relates-to, duplicates, is-duplicated-by
-
-## Custom Fields Reference
-Custom field IDs come from customFields in config.local.json:
-- team: Team (use -e for your configured team)
-- sprint: Sprint (use -S for current sprint)
-- storyPoints: Story Points (use --points)
-- acceptanceCriteria: Acceptance Criteria (use --ac)
-- testingInstructions: Testing Instructions (use --ti)
-`;
+  const help = `${agentGuide}\nConfigured projects: ${localConfig.syncProjects.join(", ")}\n`;
   if (globalFormat === "table") {
     await renderStatic(React.createElement(HelpView, { help }));
     return;
@@ -3762,7 +3360,7 @@ const searchCommand = defineCommand({
     l: { type: "string", description: "Filter by labels — comma-separated (e.g., -l frontend,urgent)" },
     priority: { type: "string", description: "Filter by priority — 1-5 (1=Highest) or name: Highest, High, Medium, Low, Lowest" },
     // Sprint filters
-    S: { type: "boolean", alias: "current-sprint", description: "Limit results to the current active sprint" },
+    "current-sprint": { type: "boolean", description: "Limit results to the current active sprint" },
     sprint: { type: "string", description: "Filter by sprint ID, or 'none' for backlog items with no sprint" },
     // Date filters
     created: { type: "string", description: "Filter by created date — relative (-7d, -24h, -2w), absolute (2024-01-01), or range (start..end)" },
@@ -3820,7 +3418,7 @@ const searchCommand = defineCommand({
       typeof args.l === "string" || typeof args.priority === "string" ||
       typeof args.epic === "string" || typeof args.points === "string" ||
       typeof args.updated === "string" || typeof args.r === "string" ||
-      args.S || typeof args.sprint === "string" ||
+      args["current-sprint"] || typeof args.sprint === "string" ||
       args["my-team"] || args.recent || typeof args.stale === "string" ||
       args.backlog || args["my-created"];
 
@@ -4522,7 +4120,7 @@ const main = defineCommand({
         a: { type: "string", description: "Assignee filter" },
         l: { type: "string", description: "Labels filter" },
         priority: { type: "string", description: "Priority filter" },
-        S: { type: "boolean", alias: "current-sprint", description: "Current sprint" },
+        "current-sprint": { type: "boolean", description: "Current sprint" },
         sprint: { type: "string", description: "Sprint ID" },
         epic: { type: "string", description: "Epic key" },
         points: { type: "string", description: "Story points filter" },
@@ -4582,7 +4180,7 @@ const main = defineCommand({
           typeof args.l === "string" || typeof args.priority === "string" ||
           typeof args.epic === "string" || typeof args.points === "string" ||
           typeof args.updated === "string" ||
-          args.S || typeof args.sprint === "string" || args.recent;
+          args["current-sprint"] || typeof args.sprint === "string" || args.recent;
 
         if (!hasFilters) {
           console.error("Error: Provide a ticket key, search query, or use filters. Run 'tik timeline --help' for options.");
@@ -5308,7 +4906,7 @@ const main = defineCommand({
         a: { type: "string", alias: "assignee", description: 'Assignee (accountId, "me", or "none")' },
         p: { type: "string", alias: "priority", description: "Priority (1-5 or name)" },
         e: { type: "boolean", alias: "team", description: "Assign to your team (myTeamId)" },
-        S: { type: "boolean", description: "Add to current sprint" },
+        "current-sprint": { type: "boolean", description: "Add to current sprint" },
         sprint: { type: "string", description: 'Sprint ID, or "none" to remove' },
         points: { type: "string", description: "Story points" },
         ac: { type: "string", description: "Acceptance criteria with markdown (or path to .md file)" },
@@ -5326,7 +4924,7 @@ const main = defineCommand({
         const creds = await getCredentials(args);
         const key = await requireTicket(typeof args.key === "string" ? [args.key] : []);
         let sprintValue: boolean | string | undefined;
-        if (args.S) sprintValue = true;
+        if (args["current-sprint"]) sprintValue = true;
         else if (typeof args.sprint === "string") sprintValue = args.sprint;
         await cmdEdit(creds, key, {
           summary: typeof args.s === "string" ? args.s : undefined,
@@ -5358,7 +4956,7 @@ const main = defineCommand({
         a: { type: "boolean", description: "Assign to me" },
         i: { type: "boolean", description: "Move to In Progress" },
         e: { type: "boolean", description: "Add your team (myTeamId)" },
-        S: { type: "boolean", description: "Add to current sprint" },
+        "current-sprint": { type: "boolean", description: "Add to current sprint" },
         sprint: { type: "string", description: "Add to specific sprint by ID" },
         priority: { type: "string", description: "Priority (1-5 or Highest/High/Medium/Low/Lowest)" },
         points: { type: "string", description: "Story points" },
@@ -5435,7 +5033,7 @@ const main = defineCommand({
           if (!isNaN(sprintId)) {
             fields[requireCustomField("sprint")] = sprintId;
           }
-        } else if (args.S) {
+        } else if (args["current-sprint"]) {
           const sprintResp = (await jiraGet(
             creds,
             `/rest/agile/1.0/board/${Config.myBoardId}/sprint?state=active`

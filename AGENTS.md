@@ -1,215 +1,116 @@
-# tik - Jira CLI Agent Guide
+# tik - Agent Guide
 
-## Overview
+`tik` is a terminal Jira CLI. Read commands hit a local SQLite cache (`~/.cache/tik/tickets.db`), so they are instant and work offline; write commands call Jira directly. This file is also printed by `tik --ai`. `tik <command> --help` is always the source of truth for flags.
 
-tik is a fast, terminal-first Jira CLI tool built with Bun that enables developers to interact with Jira without leaving the command line. It features a local SQLite cache, hybrid (keyword + semantic) search, interactive UIs, and deep GitHub PR integration.
+## Conventions
 
-## Core Architecture
+- **Output**: `--json` for parsing, `--plain` for tab-separated rows (`KEY STATUS SUMMARY ASSIGNEE POINTS`). Both work on every command. `--json` on list commands returns `{"issues": [...]}` with raw Jira fields; `tik sprint --json` returns `{"sprint": {...}, "issues": [...]}`.
+- **Fresh data**: reads use the cache. Add `-F` (`--fresh`) to sync from Jira first, or run `tik sync`.
+- **Ticket keys**: `PROJ-123`. Most commands fall back to the key in the git branch name (`feature/PROJ-123-foo`) when `KEY` is omitted. A partial key (`123`, or `p123` with a configured project alias) is resolved against the cache. `move`, `link`, `unlink` and `attach embed` always need an explicit key.
+- **Short flags**: citty parses `-s` and `-S` as the same key, so no command defines both. Sprint scoping is always the long flag `--current-sprint`.
+- **Rich text** (`-d`, `--ac`, `--ti`, comments) takes markdown, converted to Jira's ADF. A value that looks like a path (contains `/`, starts with `./` or `~/`, ends in `.md`/`.txt`/`.markdown`) and exists is read as a file; quote literal text that could be mistaken for one.
+- **Nothing is implicit**: `create` and `edit` only touch the fields you pass. Sprint, team, assignee and status are never defaulted.
+- **Dry runs**: `create` and `edit` accept `--dry-run` and print the computed fields without calling Jira.
 
-### Components
+## Reading
 
-- **main.ts**: Main entry point with command definitions using `citty`
-- **lib/**: Core utilities and business logic
-  - `api.ts`: Jira API wrappers
-  - `cache.ts`: SQLite cache management with FTS search
-  - `embeddings.ts`: Ollama integration for semantic vector search
-  - `search.ts`: MiniSearch-based fuzzy text indexing
-  - `util.ts`: Terminal utilities, git integration, file handling
-  - `github.ts`: GitHub PR integration via `gh` CLI
-  - `config.ts`: Local config loader
-- **ui/**: Ink (React for CLI) UI components
-  - `render.tsx`: Rendering layer with static/interactive modes
-  - `views.tsx`: Views for sprint, search, timeline, triage
-  - `format.ts`: Formatting utilities for status, PR, priority, projects
+| Command | Purpose |
+|---|---|
+| `tik`, `tik sprint` | My tickets in the active sprint. `-a` all team, `-e` expand done, `-i` info only, `-g` goals, `--type`, `--grep` |
+| `tik mine` | All my open tickets (`-e`, `--type`, `--grep`) |
+| `tik prio` | P1/P2 tickets in the sprint |
+| `tik view [KEY]` | Details. `-d` description, `--ac`, `--ti`, `-A` all three |
+| `tik export [KEY]` | Full markdown copy fetched live: fields, links, attachments, description, AC, TI, comments, changelog |
+| `tik history [KEY]` | Changelog timeline |
+| `tik comments [KEY]` | Comments, bodies capped at 15 lines; `-f` full, `--md` raw markdown, `-n N` last N, `--author X`, `--no-bots`/`--bots`, `--json [--raw]` |
+| `tik links [KEY]` | Issue links |
+| `tik get [KEY] REFS` | Download attachments by id, filename or `tikmedia:` token (`--out DIR`; default is a temp dir) |
+| `tik log [sprint]` | Recent changes to my tickets (`--h N` hours, default 30; `-a` everyone's) |
+| `tik standup` | Last `--hours` (default 30) of Jira and GitHub activity matched to tickets |
+| `tik sprints` | Board sprints (`--state`, default `active,future`) |
+| `tik timeline [QUERY]` | Gantt lanes from changelog for a key or search text. `--no-expand` skips related tickets |
+| `tik pr [KEY]` | PR state, reviews, CI, merge readiness (`--ci`, `--reviews`, `--merge`, `-a`, `--mine`, `--repo`, `--project`, `--org`, `--state`) |
+| `tik open [KEY]`, `tik branch` | Open in browser; show the branch's ticket |
+| `tik whoami`, `tik users` | Identity; user directory |
 
-### Data Flow
+`--pr` on `tik`, `sprint`, `mine`, `view` and `search` adds PR status to tickets.
 
-1. Commands execute via `main.ts` using `citty`
-2. Data is read from local SQLite cache (`~/.cache/tik/tickets.db`)
-3. On first run or with `-F/--fresh`, data syncs from Jira API
-4. All read operations are cached - no network calls needed unless forced
-5. Semantic search uses Ollama `nomic-embed-text` model for vector embeddings
-6. PR status integrates with GitHub via `gh` CLI
-7. UI is rendered with `Ink` (React for CLI)
+### Search
 
-## Key Features
+```bash
+tik search "login bug"                    # fuzzy text over summary + description
+tik search "auth" --summary               # summary only
+tik search -p PROJ -t Bug -s "In Progress" -a me
+tik search --contains "PROJ-822"          # exact substring over summary/description/AC/TI
+tik search --contains-any ids.txt         # one token per line (or =- for stdin), JSON result
+tik search --jql "project = PROJ AND labels = urgent ORDER BY updated DESC"
+tik jql "project = PROJ AND sprint in openSprints()"
+```
 
-### Instant Local Cache
-- All read operations (sprint, mine, search, view) hit local SQLite DB
-- Syncs incrementally using `updated` timestamps
-- Full sync: `tik sync -f`
-- Manual sync: `tik sync`
+Text search is not JQL: JQL passed as the query returns nothing. Use `--jql` or `tik jql`.
 
-### Hybrid Search
-- Combines keyword search (MiniSearch) with semantic search (Ollama embeddings)
-- Uses RRF (Reciprocal Rank Fusion) for optimized ranking
-- Fallback to fuzzy keyword search if Ollama unavailable
-- Enable/disable: `--no-semantic`, `--no-fuzzy`
+Filters: `-p` project, `-t` type, `-s` status, `-a` assignee (`me`, `none`, a name), `-l` labels (all comma-separated), `--priority` (1-5 or name), `--epic KEY`, `--points N|>N|1-5|none|any`, `--updated=-7d` (use `=` before a leading `-`).
 
-### Git Integration
-- Auto-detects ticket from git branch (`feature/PROJ-123` → PROJ-123)
-- `tik flow` commands automate:
-  - Ticket creation
-  - Feature branch creation
-  - Worktree switching
-  - PR creation
-- Worktrees maintain isolated development environments
+Known gap: the cache search ignores `-r`, `--created`, `--resolved`, `--current-sprint`, `--sprint`, `--parent`, `--my-team`, `--recent`, `--stale`, `--backlog` and `--my-created`. They are accepted but do not narrow results; use `--jql` for those (`sprint in openSprints()`, `created >= -7d`, `reporter = currentUser()`). `tik timeline` shares this limitation.
 
-### PR Status Overlay
-- Shows GitHub PR status next to Jira tickets:
-  - `○` / `●` / `○` for open/merged/closed
-  - `✓` / `✗` / `?` for review status
-  - `✓` / `✗` / `◌` for CI checks
-- Integrated via `gh pr list` and `gh search commits`
+Output: `--sort updated|created|resolved|priority|status|key` with `--asc`, `-m N` (default 50; `--count` is capped by it), `--keys`, `--count`, `--compact`, `-e` expand done.
 
-### Interactive Triage
-- `tik triage`: Edit multiple tickets in one view
-- Update status, type, sprint, points, assignee, labels in bulk
-- Uses Ink Table with selectable rows
+Matching: `--no-fuzzy` exact only, `--no-semantic` keyword only, `--min-score N` (default 30). With Ollama running, text search is hybrid keyword + vector.
 
-### Timeline Visualization
-- Gantt-style view built from changelog history
-- Shows start/done dates, dependencies, transitions
-- Works for sprint, epic, or custom search
+## Writing
 
-### Command-Line First
-- All operations available from CLI, no browser needed
-- Supports `--json`, `--plain` for scripting
-- Rich markdown support for descriptions, AC, TI
-- File input: `tik create "Title" -d ./desc.md`
+```bash
+tik create "Summary" -p PROJ -t Task -d ./desc.md --ac "- criterion" --ti "1. step" \
+  --priority 2 --points 3 -a -e --current-sprint -i
+tik edit PROJ-123 -s "New title" --add-label tech-debt
+tik edit PROJ-123 --sprint none --dry-run
+tik comment PROJ-123 "text"               # KEY is required with a message; -m FILE, --attach IMG, --edit ID, --rm ID,ID
+tik start PROJ-123                        # -> In Progress
+tik review PROJ-123 --gate-ci             # -> review status; requires open, approved, green PR
+tik move PROJ-123 "Done"                  # also: tik transition KEY [STATUS] lists or applies
+tik assign PROJ-123 [me|none|ACCOUNT_ID]   # KEY required to pass an assignee
+tik link PROJ-123 --blocks PROJ-456       # --is-blocked-by --relates-to --duplicates --is-duplicated-by
+tik unlink PROJ-123 PROJ-456              # or --id LINK_ID
+tik attach add|rm|embed ...
+```
 
-## Essential Commands
+`create` flags: `-p` project (default from config), `-t` type (default Task), `-d`, `-a` assign to me, `-e` your team, `--current-sprint`, `--sprint ID`, `--priority`, `--points`, `--ac`, `--ti`, `-i` move to In Progress.
 
-| Command | Description |
-|--------|-------------|
-| `tik` / `tik sprint` | View current sprint |
-| `tik mine` | View all open tickets assigned to you |
-| `tik prio` | View high priority tickets |
-| `tik view KEY` | View ticket details with description, AC, TI |
-| `tik search "query"` | Fuzzy + semantic text search |
-| `tik triage` | Interactive bulk-edit missing fields |
-| `tik timeline KEY` | Gantt timeline with dependencies |
-| `tik create "Summary"` | Create new ticket (-a, -S, -i, -t, --ac, --ti available) |
-| `tik edit KEY` | Edit ticket fields |
-| `tik start KEY` | Transition to "In Progress" |
-| `tik review KEY` | Transition to your review status |
-| `tik comment KEY "msg"` | Add comment |
-| `tik link KEY --blocks TARGET` | Create link between tickets |
-| `tik log` | View recent changes to your tickets |
-| `tik sync` | Sync from Jira to local cache |
-| `tik flow start KEY` | Create ticket + git branch + worktree |
-| `tik flow pr` | Create or open GitHub PR for current branch |
-| `tik flow status` | Show Jira+git+PR workflow status |
-| `tik doc view ID` | View Confluence page content as markdown |
-| `tik doc create "Title"` | Create Confluence page (--space, --parent, -d, --stdin available) |
-| `tik doc edit ID` | Edit Confluence page interactively in terminal |
-| `tik doc search "query"` | Search Confluence pages (local FTS or online via -O) |
-| `tik doc sync` | Sync Confluence pages to local cache |
+`edit` flags: `-s`, `-d`, `-a me|none|ACCOUNT_ID`, `-p`/`--priority` (1-5 or name), `-e`, `--current-sprint`, `--sprint ID|none`, `--points`, `--ac`, `--ti`, `--labels a,b`, `--add-label` or `--remove-label` (one per call; the second overwrites the first), `--parent KEY|none`, `--status NAME|ID`. Invalid priority, sprint or points values abort the command.
 
+Priority: 1 Highest, 2 High, 3 Medium, 4 Low, 5 Lowest.
+
+## Git and PR workflow
+
+Run these inside a git repo.
+
+```bash
+tik flow start "Title"        # create ticket if needed, branch from base, switch worktree (-w NAME, -p PROJ, --base, -y)
+tik flow start PROJ-123
+tik flow pr [--open] [--draft]  # push and create a PR with Jira title and link
+tik flow status               # ticket, branch, worktree, PR and CI together
+tik opr                       # push and open the PR in the browser
+```
+
+PRs are matched to tickets by the key in the branch name. Repos come from `githubRepos` in the config; `gh` must be authenticated.
+
+## Maintenance
+
+| Command | Purpose |
+|---|---|
+| `tik sync` | Incremental sync of open tickets (`-f` full, `-a` include done, `-p PROJ,PROJ`, `-c` changelogs only, `--users`, `--backfill`, `--stats`) |
+| `tik embed [sync\|check]` | Embedding stats, generate pending embeddings, check Ollama |
+| `tik triage [-a]` | Interactive bulk fill of type, sprint, points, team |
+| `tik users` | List and edit the user directory |
+| `tik doc view\|create\|edit\|search\|sync` | Confluence pages (`search -O` queries Confluence directly) |
 
 ## Configuration
 
-### Required Files
+`~/.config/tik/config.local.json` (see `config.example.json`). Required: `jiraBase`, `defaultProject`, `syncProjects`. Commands that need `myTeamId`, `myBoardId`, `inProgressTransitionId`, `reviewTransitionId` or a `customFields` entry say which key is missing. Credentials come from 1Password (`op`) and are cached in `/tmp/tik-creds-<uid>`; `--refresh-auth` reloads them.
 
-- `~/.config/tik/config.local.json`: User-specific config (created from `config.example.json`)
-- `~/.cache/tik/tickets.db`: Local SQLite cache (auto-created)
+## Pitfalls
 
-### Required External Tools
-
-| Tool | Purpose |
-|------|---------|
-| `op` (1Password CLI) | Fetches Jira API token (never stored in config) |
-| `gh` (GitHub CLI) | Fetches PR status and creates PRs |
-| `ollama` | Enables semantic search with `nomic-embed-text` (optional) |
-| `bun` | Runtime and package manager |
-| `just` | Command runner for build tasks |
-
-### config.local.json Fields
-
-| Field | Description |
-|-------|-------------|
-| `jiraBase` | Jira URL (e.g., `https://your-org.atlassian.net`) |
-| `myEmail` | Your Atlassian account email |
-| `defaultProject` | Your main project key (e.g., `PROJ`) |
-| `syncProjects` | Array of project keys to sync |
-| `myBoardId` | Your agile board ID |
-| `myTeamId` | Your team's UUID in Jira |
-| `inProgressTransitionId` | Transition ID for "In Progress" |
-| `reviewTransitionId` | Transition ID for your review status |
-| `teamBoardMap` | Maps team names to board IDs |
-| `teamIdNames` | Maps team UUIDs to names |
-| `githubRepos` | Maps Jira projects to GitHub repos |
-| `projectAliases` | Maps project keys to shorthand used to resolve keys (e.g., `p123`) |
-| `timelineFirstProject` | Project listed first within timeline groups |
-| `statuses` | Workflow status names by role (`inProgress`, `review`, `ready`, `todo` subgroups, `done`, `reviewName`, `timeline`); defaults to the Jira default workflow |
-| `customFields` | Jira custom field IDs by role (`team`, `sprint`, `storyPoints`, `epicLink`, `acceptanceCriteria`, `testingInstructions`) |
-| `users` | Array of team members with `isMainAccount: true` for you |
-
-## Semantic Search Setup (Optimal Experience)
-
-```bash
-# Install Ollama
-brew install ollama
-
-# Pull the embedding model (274MB)
-ollama pull nomic-embed-text
-
-# Start the server (run in background)
-ollama serve
-
-# Validate
-tik embed check
-
-# Sync embeddings (for existing tickets)
-tik embed sync
-```
-
-Check embedding status:
-```bash
-tik embed
-```
-
-## Workflows
-
-### Daily Flow
-1. `tik` → see sprint
-2. `tik mine` → see your open tickets
-3. `tik search "billing bug"` → finds issues
-4. `tik view PROJ-123` → view details
-5. `tik start PROJ-123` → begin work
-6. `tik flow start PROJ-123` → create branch + worktree
-7. `tik flow pr --open` → create PR and open in browser
-8. `tik log` → track changes
-
-### Triaging Workflow
-```bash
-tik triage -a
-```
-Use arrow keys to navigate - press Enter to edit any field (status, sprint, points, etc.)
-
-### Timeline Flow
-```bash
-tik timeline -S
-```
-Shows timeline from changelog: when tickets moved to "In Progress", "Ready for Review", etc.
-
-## Key Dependencies Library
-
-- **bun**: Fast JS runtime
-- **citty**: Command-line interface builder
-- **Ink**: React for CLI rendering
-- **sqlite**: Local SQLite cache
-- **minisearch**: Fuzzy keyword search engine
-- **ollama**: Local LLM for embeddings
-- **gh**: GitHub CLI for PR integration
-- **1password-cli**: Secure credential storage
-
-## Performance
-
-- Sprint view: Instant (<50ms) — cached locally
-- Full sync: ~2-3min for 1000+ tickets
-- Embedding sync: ~45s for 1000 tickets
-
-## Note on Ollama
-
-Ollama is optional — all functionality works without it. Semantic search just improves search quality when available.
+- `view --full` does not exist; use `view -A` to see description, AC and TI.
+- `comments` truncates long bodies unless `-f` or `--md` is given.
+- `view` and `history` read the cache; `export` reads Jira. After a fresh install or schema change, `tik sync -f` backfills missing fields.
+- `tik --ai` is the long form; `-ai` parses as `-a -i`.
