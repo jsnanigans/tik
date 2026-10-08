@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { type IssueData, parseIssue } from "./parser";
 import { getSearchIndex, invalidateSearchIndex, withRelaxedFallback } from "./search";
 import { getCacheDir } from "./util";
-import { DIMENSIONS, computeContentHash } from "./embeddings";
+import { DIMENSIONS, chunkIssue, computeChunkHash, type IssueChunk } from "./embeddings";
 import { customFields, localConfig } from "./config";
 
 export type CachedIssue = {
@@ -54,7 +54,7 @@ const SEARCHABLE_TEXT_SQL =
   "i.summary || ' ' || coalesce(i.description, '') || ' ' || coalesce(i.acceptance_criteria, '') || ' ' || coalesce(i.testing_instructions, '')";
 const RESOLVED_SQL = "json_extract(i.raw, '$.fields.resolutiondate')";
 const TEXT_FIELDS = ["summary", "description", "acceptance_criteria", "testing_instructions"];
-const SCHEMA_VERSION = 14; // Bump when schema changes
+const SCHEMA_VERSION = 15; // Bump when schema changes
 const DEFAULT_PROJECT = localConfig.defaultProject;
 const PROJECT_ALIASES = localConfig.projectAliases;
 
@@ -631,6 +631,23 @@ function migrateIfNeeded(database: Database): void {
     `);
   }
 
+  if (currentVersion < 15) {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS issue_chunks (
+        key TEXT NOT NULL,
+        part TEXT NOT NULL,
+        idx INTEGER NOT NULL,
+        text_hash TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        PRIMARY KEY (key, part, idx)
+      );
+      CREATE TRIGGER IF NOT EXISTS issues_chunks_ad AFTER DELETE ON issues BEGIN
+        DELETE FROM issue_chunks WHERE key = OLD.key;
+      END;
+      UPDATE issues SET embedding = NULL, embedding_hash = NULL;
+    `);
+  }
+
   if (currentVersion < SCHEMA_VERSION) {
     database.run("INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('schema_version', ?)", [SCHEMA_VERSION.toString()]);
   }
@@ -1024,7 +1041,9 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     const runSearch = (combineWith: "AND" | "OR") => index.search(fuzzyQuery, {
       fields: parsePartialKey(fuzzyQuery) ? undefined : TEXT_FIELDS,
       filter: filterKeySet ? (result) => filterKeySet!.has(result.id as string) : undefined,
+      combineWith,
     });
+    const searchResults = runSearch("AND");
 
     // Apply relative threshold: --min-score is % of top result's score
     const minScorePct = opts.minScore ?? 50;
@@ -1042,9 +1061,7 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
 
     if (resultKeys.length === 0) {
       rows = [];
-      combineWith,
     } else {
-    const searchResults = runSearch("AND");
       const placeholders = resultKeys.map(() => "?").join(", ");
       const fetchSql = `SELECT key, summary, status, project, updated, raw FROM issues WHERE key IN (${placeholders})`;
       const fetchedRows = database.query(fetchSql).all(...(resultKeys as (string | number | null)[])) as Row[];
@@ -1949,59 +1966,96 @@ export function getWasMineKeys(accountId: string, keys?: string[]): Set<string> 
 
 // --- Embedding functions ---
 
-type EmbeddingIssue = {
-  key: string;
-  summary: string;
-  description: string | null;
-  acceptance_criteria: string | null;
-  testing_instructions: string | null;
-};
+export type PendingChunk = IssueChunk & { key: string; title: string; hash: string };
 
-export function getIssuesNeedingEmbedding(limit?: number): EmbeddingIssue[] {
+type ChunkRow = { key: string; part: string; idx: number; text_hash: string };
+
+const chunkId = (c: { key: string; part: string; idx: number }) => `${c.key}|${c.part}|${c.idx}`;
+
+function diffChunks(full: boolean): { pending: PendingChunk[]; obsolete: ChunkRow[] } {
   const database = getDb();
-  const rows = database.query(
-    `SELECT key, summary, description, acceptance_criteria, testing_instructions, embedding_hash
-     FROM issues${limit ? ` LIMIT ${limit}` : ""}`
-  ).all() as Array<EmbeddingIssue & { embedding_hash: string | null }>;
+  const lastEmbed = full
+    ? null
+    : (database.query("SELECT value FROM sync_meta WHERE key = 'last_embed'").get() as { value: string } | null)?.value;
+  const issues = database.query(
+    `SELECT key, summary, description, acceptance_criteria, testing_instructions
+     FROM issues${lastEmbed ? " WHERE cached_at > ?" : ""}`
+  ).all(...(lastEmbed ? [lastEmbed] : [])) as Array<{
+    key: string;
+    summary: string;
+    description: string | null;
+    acceptance_criteria: string | null;
+    testing_instructions: string | null;
+  }>;
 
-  return rows.filter((row) => {
-    const currentHash = computeContentHash({
-      summary: row.summary,
-      description: row.description,
-      acceptanceCriteria: row.acceptance_criteria,
-      testingInstructions: row.testing_instructions,
+  const stored = database.query("SELECT key, part, idx, text_hash FROM issue_chunks").all() as ChunkRow[];
+  const storedHashes = new Map(stored.map((row) => [chunkId(row), row.text_hash]));
+  const considered = new Set<string>();
+  const current = new Set<string>();
+  const pending: PendingChunk[] = [];
+
+  for (const issue of issues) {
+    considered.add(issue.key);
+    const chunks = chunkIssue({
+      summary: issue.summary,
+      description: issue.description,
+      acceptanceCriteria: issue.acceptance_criteria,
+      testingInstructions: issue.testing_instructions,
     });
-    return row.embedding_hash !== currentHash;
-  });
-}
-
-export function cacheEmbeddings(data: Array<{ key: string; embedding: Float32Array; hash: string }>): void {
-  if (data.length === 0) return;
-  const database = getDb();
-  const stmt = database.prepare("UPDATE issues SET embedding = ?, embedding_hash = ? WHERE key = ?");
-  const updateMany = database.transaction((items: typeof data) => {
-    for (const d of items) {
-      const buf = Buffer.from(d.embedding.buffer, d.embedding.byteOffset, d.embedding.byteLength);
-      stmt.run(buf, d.hash, d.key);
+    for (const chunk of chunks) {
+      const id = chunkId({ key: issue.key, ...chunk });
+      const hash = computeChunkHash({ title: issue.summary, text: chunk.text });
+      current.add(id);
+      if (storedHashes.get(id) !== hash) pending.push({ ...chunk, key: issue.key, title: issue.summary, hash });
     }
-  });
-  updateMany(data);
+  }
+
+  const obsolete = stored.filter((row) => considered.has(row.key) && !current.has(chunkId(row)));
+  return { pending, obsolete };
 }
 
-let embeddingCache: Map<string, Float32Array> | null = null;
-
-export function getAllEmbeddings(): Map<string, Float32Array> {
-  if (embeddingCache) return embeddingCache;
+export function getChunksNeedingEmbedding(full = false): PendingChunk[] {
+  const { pending, obsolete } = diffChunks(full);
   const database = getDb();
-  const rows = database.query(
-    "SELECT key, embedding FROM issues WHERE embedding IS NOT NULL"
+  const stmt = database.prepare("DELETE FROM issue_chunks WHERE key = ? AND part = ? AND idx = ?");
+  database.transaction(() => {
+    for (const row of obsolete) stmt.run(row.key, row.part, row.idx);
+  })();
+  return pending;
+}
+
+export function cacheChunkEmbeddings(data: Array<PendingChunk & { embedding: Float32Array }>): void {
+  const database = getDb();
+  const stmt = database.prepare(
+    "INSERT OR REPLACE INTO issue_chunks (key, part, idx, text_hash, embedding) VALUES (?, ?, ?, ?, ?)"
+  );
+  database.transaction(() => {
+    for (const d of data) {
+      const buf = Buffer.from(d.embedding.buffer, d.embedding.byteOffset, d.embedding.byteLength);
+      stmt.run(d.key, d.part, d.idx, d.hash, buf);
+    }
+  })();
+}
+
+export function setLastEmbedTime(timestamp: string): void {
+  getDb().run("INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_embed', ?)", [timestamp]);
+}
+
+let embeddingCache: Map<string, Float32Array[]> | null = null;
+
+export function getAllChunkEmbeddings(): Map<string, Float32Array[]> {
+  if (embeddingCache) return embeddingCache;
+  const rows = getDb().query(
+    "SELECT key, embedding FROM issue_chunks ORDER BY key, part, idx"
   ).all() as Array<{ key: string; embedding: Buffer }>;
 
-  const map = new Map<string, Float32Array>();
+  const map = new Map<string, Float32Array[]>();
   for (const row of rows) {
-    if (row.embedding && row.embedding.byteLength === DIMENSIONS * 4) {
-      map.set(row.key, new Float32Array(row.embedding.buffer, row.embedding.byteOffset, DIMENSIONS));
-    }
+    if (row.embedding.byteLength !== DIMENSIONS * 4) continue;
+    const vector = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, DIMENSIONS);
+    const vectors = map.get(row.key);
+    if (vectors) vectors.push(vector);
+    else map.set(row.key, [vector]);
   }
   embeddingCache = map;
   return map;
@@ -2011,15 +2065,11 @@ export function invalidateEmbeddingCache(): void {
   embeddingCache = null;
 }
 
-export function getEmbeddingStats(): { total: number; embedded: number; pending: number } {
+export function getEmbeddingStats(): { embedded: number; pending: number; issues: number } {
   const database = getDb();
-  const totalRow = database.query("SELECT COUNT(*) as count FROM issues").get() as { count: number };
-  const embeddedRow = database.query("SELECT COUNT(*) as count FROM issues WHERE embedding IS NOT NULL").get() as { count: number };
-  return {
-    total: totalRow.count,
-    embedded: embeddedRow.count,
-    pending: totalRow.count - embeddedRow.count,
-  };
+  const embedded = database.query("SELECT COUNT(*) as count FROM issue_chunks").get() as { count: number };
+  const issues = database.query("SELECT COUNT(*) as count FROM issues").get() as { count: number };
+  return { embedded: embedded.count, pending: diffChunks(true).pending.length, issues: issues.count };
 }
 
 export interface CachedPage {

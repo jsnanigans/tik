@@ -128,8 +128,7 @@ import {
   resetChangelogSynced,
   searchCacheHybrid,
   type HybridSearchOpts,
-  isOllamaAvailable,
-  isModelAvailable,
+  isEmbedderReady,
   syncEmbeddings,
   getEmbeddingStats,
   invalidateEmbeddingCache,
@@ -1697,9 +1696,8 @@ async function runLocalSearch(args: Record<string, unknown>, creds: Credentials,
   const loadingMsg = localOnly ? "Searching local cache..." : "Ranking results...";
   const showSpinner = globalFormat === "table" && !args.keys && !args.count;
   if (showSpinner) showLoading(loadingMsg);
-  let cachedIssues = opts.text && !noSemantic
-    ? await searchCacheHybrid(hybridOpts)
-    : await searchCache(opts);
+  const search = await searchCacheHybrid(hybridOpts);
+  let cachedIssues = search.issues;
   if (globalGrepFilter) cachedIssues = cachedIssues.filter(c => globalGrepFilter!.test(c.summary));
   if (showSpinner) clearLoading();
 
@@ -1718,7 +1716,11 @@ async function runLocalSearch(args: Record<string, unknown>, creds: Credentials,
   }
 
   // Build result in same format as jiraSearch for formatIssues
-  const result = { issues: cachedIssues.map(c => c.raw) };
+  const result = { issues: cachedIssues.map(c => c.raw), semantic: search.semantic };
+
+  if (globalFormat === "table" && opts.text && !noSemantic && !search.semantic) {
+    out(`${C.dim}semantic search off — run tik embed sync${C.reset}`);
+  }
 
   const title = localOnly ? "Local Search Results" : "Search Results";
 
@@ -2103,11 +2105,10 @@ async function runSync(creds: Credentials, opts?: {
       });
     }
 
-    // Embedding phase (best-effort, skipped if Ollama unavailable)
+    // Embedding phase (best-effort, skipped if the model is not cached)
     let embeddedCount = 0;
     try {
-      const ollamaUp = await isOllamaAvailable();
-      if (ollamaUp) {
+      if (isEmbedderReady()) {
         progress?.startPhase("embeddings");
         embeddedCount = await syncEmbeddings((done, total) => {
           progress?.update(done, total);
@@ -4255,9 +4256,7 @@ const main = defineCommand({
           const opts = await buildSearchOpts(args, creds, 20);
           const noSemantic = isDisabled(args, "semantic");
           const hybridOpts: HybridSearchOpts = { ...opts, noSemantic };
-          const cachedIssues = opts.text && !noSemantic
-            ? await searchCacheHybrid(hybridOpts)
-            : await searchCache(opts);
+          const { issues: cachedIssues } = await searchCacheHybrid(hybridOpts);
           clearLoading();
 
           if (cachedIssues.length === 0) {
@@ -5428,60 +5427,35 @@ const main = defineCommand({
       },
     }),
     embed: defineCommand({
-      meta: { description: "Manage semantic search embeddings" },
+      meta: { description: "Show semantic search embedding stats, or backfill them with `sync` (first run downloads the ~325 MB model)" },
       args: {
-        action: { type: "positional", required: false, description: "Action: sync (generate embeddings), check (Ollama status)" },
+        action: { type: "positional", required: false, description: "Action: sync (embed all pending chunks, downloads the model if needed)" },
       },
       run: async ({ args }) => {
         subCommandExecuted = true;
 
-        const action = typeof args.action === "string" ? args.action : "stats";
-
-        if (action === "check") {
-          const ollamaUp = await isOllamaAvailable();
-          if (!ollamaUp) {
-            out(`${C.red}✗${C.reset} Ollama is not running`);
-            out(`${C.dim}Start with: ollama serve${C.reset}`);
-            return;
-          }
-          out(`${C.green}✓${C.reset} Ollama is running`);
-          const modelReady = await isModelAvailable();
-          if (modelReady) {
-            out(`${C.green}✓${C.reset} nomic-embed-text model available`);
-          } else {
-            out(`${C.red}✗${C.reset} nomic-embed-text model not found`);
-            out(`${C.dim}Install with: ollama pull nomic-embed-text${C.reset}`);
-          }
-          return;
-        }
-
-        if (action === "sync") {
-          const ollamaUp = await isOllamaAvailable();
-          if (!ollamaUp) {
-            out(`${C.red}✗${C.reset} Ollama is not running. Start with: ${C.cyan}ollama serve${C.reset}`);
-            return;
-          }
+        if (args.action === "sync") {
           const progress = new SyncProgress("Embedding sync");
           progress.startPhase("embeddings");
           const count = await syncEmbeddings((done, total) => {
             progress.update(done, total);
-          });
+          }, { full: true, download: true });
           if (count > 0) invalidateEmbeddingCache();
           const msg = count === 0
             ? `${C.green}✓${C.reset} ${C.dim}All embeddings up to date${C.reset}`
-            : `${C.green}✓${C.reset} Generated ${count} embeddings`;
+            : `${C.green}✓${C.reset} Embedded ${count} chunks`;
           await progress.done(msg);
           return;
         }
 
-        // Default: stats
         const stats = getEmbeddingStats();
         out(`${C.bold}Embedding Statistics${C.reset}`);
-        out(`Total issues:  ${C.cyan}${stats.total}${C.reset}`);
-        out(`Embedded:      ${C.green}${stats.embedded}${C.reset}`);
-        out(`Pending:       ${stats.pending > 0 ? C.yellow + stats.pending + C.reset : C.dim + "0" + C.reset}`);
+        out(`Issues:          ${C.cyan}${stats.issues}${C.reset}`);
+        out(`Chunks embedded: ${C.green}${stats.embedded}${C.reset}`);
+        out(`Chunks pending:  ${stats.pending > 0 ? C.yellow + stats.pending + C.reset : C.dim + "0" + C.reset}`);
+        out(`Model cached:    ${isEmbedderReady() ? `${C.green}yes${C.reset}` : `${C.red}no${C.reset}`}`);
         if (stats.pending > 0) {
-          out(`\n${C.dim}Run ${C.bold}tik embed sync${C.reset}${C.dim} to generate missing embeddings${C.reset}`);
+          out(`\n${C.dim}Run ${C.bold}tik embed sync${C.reset}${C.dim} to embed the pending chunks${C.reset}`);
         }
       },
     }),

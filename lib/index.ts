@@ -133,8 +133,8 @@ export {
 } from "./cache";
 export { highlightTerms, findExcerpts } from "./fuzzy";
 export { isStopWord, invalidateSearchIndex } from "./search";
-export { searchCacheHybrid, type HybridSearchOpts } from "./hybrid-search";
-export { isOllamaAvailable, isModelAvailable } from "./embeddings";
+export { searchCacheHybrid, rankHybrid, TUNING, type HybridSearchOpts } from "./hybrid-search";
+export { isEmbedderReady } from "./embeddings";
 export { syncEmbeddings } from "./embed-sync";
 export {
   type TimelineDate,
