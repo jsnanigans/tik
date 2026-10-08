@@ -15,6 +15,14 @@ const STOP_WORDS = new Set([
   "what", "when", "which", "who", "will", "with", "you", "your",
 ]);
 
+const RELAX_MIN = 5;
+
+export function withRelaxedFallback<T>(strict: T[], relaxed: () => T[], keyOf: (item: T) => string): T[] {
+  if (strict.length >= RELAX_MIN) return strict;
+  const seen = new Set(strict.map(keyOf));
+  return [...strict, ...relaxed().filter(item => !seen.has(keyOf(item)))];
+}
+
 export function isStopWord(word: string): boolean {
   return STOP_WORDS.has(word.toLowerCase());
 }

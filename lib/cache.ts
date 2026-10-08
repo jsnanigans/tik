@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { type IssueData, parseIssue } from "./parser";
-import { getSearchIndex, invalidateSearchIndex } from "./search";
+import { getSearchIndex, invalidateSearchIndex, withRelaxedFallback } from "./search";
 import { getCacheDir } from "./util";
 import { DIMENSIONS, computeContentHash } from "./embeddings";
 import { customFields, localConfig } from "./config";
@@ -847,13 +847,12 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
 
   // FTS5 text search with BM25 ranking (non-fuzzy mode)
   let useFtsRanking = false;
-  let ftsQuery = "";
+  let ftsTerms: string[] = [];
   if (opts.text && !useFuzzy) {
-    ftsQuery = opts.text
+    ftsTerms = opts.text
       .split(/\s+/)
       .filter(Boolean)
-      .map(term => `"${term.replace(/"/g, '""')}"*`)
-      .join(" ");
+      .map(term => `"${term.replace(/"/g, '""')}"*`);
     useFtsRanking = true;
   }
 
@@ -1022,7 +1021,7 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     // MiniSearch-based search with BM25+ ranking
     const index = getSearchIndex();
 
-    const searchResults = index.search(fuzzyQuery, {
+    const runSearch = (combineWith: "AND" | "OR") => index.search(fuzzyQuery, {
       fields: parsePartialKey(fuzzyQuery) ? undefined : TEXT_FIELDS,
       filter: filterKeySet ? (result) => filterKeySet!.has(result.id as string) : undefined,
     });
@@ -1034,7 +1033,8 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     const minResults = 1;
 
     const aboveThreshold = searchResults.filter(r => r.score >= scoreThreshold);
-    const filteredResults = aboveThreshold.length >= minResults ? aboveThreshold : searchResults.slice(0, Math.min(minResults, searchResults.length));
+    const strictResults = aboveThreshold.length >= minResults ? aboveThreshold : searchResults.slice(0, Math.min(minResults, searchResults.length));
+    const filteredResults = withRelaxedFallback(strictResults, () => runSearch("OR"), r => r.id as string);
     const resultKeys = filteredResults.slice(0, requestedLimit).map(r => r.id as string);
 
     // Build score map for callers that need it
@@ -1042,7 +1042,9 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
 
     if (resultKeys.length === 0) {
       rows = [];
+      combineWith,
     } else {
+    const searchResults = runSearch("AND");
       const placeholders = resultKeys.map(() => "?").join(", ");
       const fetchSql = `SELECT key, summary, status, project, updated, raw FROM issues WHERE key IN (${placeholders})`;
       const fetchedRows = database.query(fetchSql).all(...(resultKeys as (string | number | null)[])) as Row[];
@@ -1059,7 +1061,6 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
       // Lower BM25 score = better match, so we sort ASC
       const ftsCondition = "issues_fts MATCH ?";
       const ftsWhere = whereClause ? `${whereClause} AND ${ftsCondition}` : `WHERE ${ftsCondition}`;
-      params.push(ftsQuery);
 
       const limitClause = `LIMIT ${requestedLimit}`;
       sql = `SELECT i.key, i.summary, i.status, i.project, i.updated, i.raw,
@@ -1074,7 +1075,10 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     }
 
     try {
-      rows = database.query(sql).all(...(params as (string | number | null)[])) as Row[];
+      const runQuery = (...extra: string[]) => database.query(sql).all(...(params as (string | number | null)[]), ...extra) as Row[];
+      rows = useFtsRanking
+        ? withRelaxedFallback(runQuery(ftsTerms.join(" ")), () => runQuery(ftsTerms.join(" OR ")), r => r.key).slice(0, requestedLimit)
+        : runQuery();
     } catch (err) {
       if (!retried && err instanceof Error && err.message.includes("fts5: missing row")) {
         await rebuildFtsIndex();
