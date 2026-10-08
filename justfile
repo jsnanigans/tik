@@ -7,7 +7,8 @@ install-deps:
 
 # Build compiled binary
 build: install-deps
-    bun build main.ts --compile --outfile tik
+    bun run build.ts
+    codesign --force -s - tik
 
 # Run the CLI with optional args
 run *args:
