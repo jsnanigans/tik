@@ -113,4 +113,19 @@ Images and attachments are out of scope.
 
 ## Results
 
-To be filled in after step 9.
+27 queries (draft set, expected keys pending review). Recall@10 / MRR, 256 dims unless noted.
+
+| Config | All | Exact | Paraphrase | Vague |
+|---|---|---|---|---|
+| Keyword AND | 0.35 / 0.37 | 0.95 / 1.00 | 0.00 / 0.00 | 0.00 / 0.00 |
+| Keyword + OR fallback | 0.64 / 0.53 | 1.00 / 1.00 | 0.40 / 0.32 | 0.45 / 0.16 |
+| Vector only | 0.67 / 0.54 | 0.75 / 0.73 | 0.60 / 0.36 | 0.64 / 0.54 |
+| Hybrid, keyword weight 2, rrfK 60 | 0.64 / 0.59 | 1.00 / 1.00 | 0.40 / 0.33 | 0.45 / 0.40 |
+| Hybrid, keyword weight 1, rrfK 60 | 0.72 / 0.64 | 1.00 / 1.00 | 0.50 / 0.36 | 0.64 / 0.53 |
+| **Hybrid, keyword weight 1, rrfK 20, minSimilarity 0.4 (locked)** | **0.83 / 0.64** | 1.00 / 1.00 | 0.70 / 0.37 | 0.79 / 0.53 |
+
+- **Locked:** `rrfK: 20, keywordWeight: 1, vectorWeight: 1, minSimilarity: 0.4`.
+- **Multi-chunk bonus:** no measurable gain, removed.
+- **Vector weight 2 or 3:** hurts exact queries (1.00 to 0.75).
+- **256 vs 768 dims:** 768 gave +0.02 to 0.04 MRR and no recall gain (best hybrid recall 0.83 at 256 vs 0.77 to 0.82 at 768), at 3x the storage (about 65 MB vs 21 MB). Stay at 256.
+- **Step 1 outcome:** option (a). `build.ts` bundles `onnxruntime-node`, stubs `sharp` and ad-hoc signs the binary. transformers.js is pinned at 4.3.1. darwin-arm64 only.

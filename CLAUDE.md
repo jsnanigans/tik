@@ -13,7 +13,7 @@ Usage documentation lives in `AGENTS.md` (also printed by `tik --ai`), `README.m
 ```bash
 bun run main.ts [command]   # run from source (or: just run [args])
 just check                  # tsc --noEmit
-just build                  # compile ./tik
+just build                  # compile ./tik via build.ts and codesign it
 just install                # build and copy to ~/.local/bin
 just clear-cache            # drop the cached credentials
 ```
@@ -31,7 +31,7 @@ There is no test suite. Verify changes with `--dry-run` (`create`, `edit`) and r
   - `api.ts`: Jira REST wrappers (`jiraGet/Post/Put/Delete/Upload`, `jiraSearch`, `jiraSearchPaginated`, `jiraBulkFetch`, `jiraBulkChangelog`).
   - `cache.ts`: SQLite schema, sync metadata, local queries, key resolution (`resolveKey`), user directory.
   - `search.ts`, `hybrid-search.ts`, `fuzzy.ts`: MiniSearch index (persisted in `~/.cache/tik/`), RRF merge with vector results, excerpt highlighting.
-  - `embeddings.ts`, `embed-sync.ts`: Ollama `nomic-embed-text` client and the pending-embeddings pipeline.
+  - `embeddings.ts`, `embed-sync.ts`: in-process EmbeddingGemma (transformers.js) embedder, issue chunking, and the pending-chunks pipeline.
   - `parser.ts`: raw Jira JSON to typed `IssueData`, `SprintData`, `CommentData`, `IssueLinkData`.
   - `markdown.ts`: markdown to ADF (`markdownToAdf`), ADF and Jira wiki to markdown, `tikmedia:` image placeholders.
   - `history.ts`, `timeline.ts`, `export.ts`: changelog parsing, timeline graph, `tik export` renderer.

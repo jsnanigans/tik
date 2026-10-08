@@ -55,7 +55,7 @@ More filters: `-r` reporter (`me` or a name), `--my-created`, `--created` and `-
 
 Output: `--sort updated|created|resolved|priority|status|key` with `--asc`, `-m N` (default 50; `--count` is capped by it), `--keys`, `--count`, `--compact`, `-e` expand done.
 
-Matching: `--no-fuzzy` exact only, `--no-semantic` keyword only, `--min-score N` (default 30). With Ollama running, text search is hybrid keyword + vector.
+Matching: `--no-fuzzy` exact only, `--no-semantic` keyword only, `--min-score N` (default 30). Keyword matching requires all terms first and falls back to any term (OR) when fewer than 5 results. Once embeddings exist, text search is hybrid keyword + vector; `--json` results carry `semantic: true|false`, and table output prints `semantic search off — run tik embed sync` when vector ranking did not run.
 
 ## Writing
 
@@ -99,7 +99,7 @@ PRs are matched to tickets by the key in the branch name. Repos come from `githu
 | Command | Purpose |
 |---|---|
 | `tik sync` | Incremental sync of tickets (`-f` full, `-p PROJ,PROJ`, `-c` changelogs only, `--users`, `--backfill`, `--stats`) |
-| `tik embed [sync\|check]` | Embedding stats, generate pending embeddings, check Ollama |
+| `tik embed [sync]` | Embedding stats; `sync` embeds all pending chunks (full backfill; first run downloads the ~325 MB model) |
 | `tik triage [-a]` | Interactive bulk fill of type, sprint, points, team |
 | `tik users` | List and edit the user directory |
 | `tik doc view\|create\|edit\|search\|sync` | Confluence pages (`search -O` queries Confluence directly) |

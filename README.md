@@ -17,7 +17,7 @@ A fast Jira CLI for the terminal. Reads come from a local SQLite cache, so they 
 
 - [Bun](https://bun.sh) and [just](https://github.com/casey/just)
 - [1Password CLI](https://developer.1password.com/docs/cli/) with an item named `atlassian api token` that has `username` (your Atlassian email) and `token` ([API token](https://id.atlassian.com/manage-profile/security/api-tokens)) fields
-- Optional: [GitHub CLI](https://cli.github.com/) for PR status and `tik flow`, [Ollama](https://ollama.com/) with `nomic-embed-text` for semantic search
+- Optional: [GitHub CLI](https://cli.github.com/) for PR status and `tik flow`
 
 ## Setup
 
@@ -62,12 +62,11 @@ Reads use the cache; add `-F` to sync first or run `tik sync`. `tik --help` list
 ### Semantic search
 
 ```bash
-ollama pull nomic-embed-text && ollama serve
-tik embed check
-tik embed sync
+tik embed sync   # first run downloads the ~325 MB EmbeddingGemma model
+tik embed        # embedding stats
 ```
 
-With Ollama running, text search combines keyword and vector ranking. Without it, search falls back to keywords only.
+Once embeddings exist, text search combines keyword and vector ranking. Plain search never downloads the model; without embeddings it uses keywords only.
 
 ## License
 
