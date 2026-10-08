@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { C, truncate, getTerminalWidth, stripAnsi } from "../lib";
 import { localConfig } from "../lib/config";
+import { formatMonthDay } from "../lib/timeline";
 import type { TimelineData, TimelineEvent } from "../lib";
 import { getStatusColor } from "./format";
 
@@ -39,12 +40,8 @@ const ticketColorPalette = [
 ];
 
 function formatDateRange(start: string, end: string): string {
-  const fmt = (d: Date) => `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
-  const s = new Date(start);
-  const e = new Date(end);
-  const now = new Date();
-  const isPresent = Math.abs(e.getTime() - now.getTime()) < 7 * 24 * 60 * 60 * 1000;
-  return `${fmt(s)} → ${isPresent ? "present" : fmt(e)}`;
+  const isPresent = Math.abs(new Date(`${end}T00:00`).getTime() - Date.now()) < 7 * 24 * 60 * 60 * 1000;
+  return `${formatMonthDay(start)} → ${isPresent ? "present" : formatMonthDay(end)}`;
 }
 
 type TimelineViewProps = {

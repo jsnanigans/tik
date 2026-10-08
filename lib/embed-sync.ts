@@ -45,9 +45,7 @@ export async function syncEmbeddings(
       done += batch.length;
       onProgress?.(done, total);
     } catch {
-      // Best effort — save progress so far, skip this batch
-      done += batch.length;
-      onProgress?.(done, total);
+      break;
     }
   }
 

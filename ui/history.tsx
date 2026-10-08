@@ -135,14 +135,14 @@ export async function buildHistoryLines(data: HistoryData): Promise<string[]> {
   }
 
   const origStatus = originalValues["Status"] ?? data.issue.status;
-  const origPriority = originalValues["Priority"] ?? data.issue.priority;
-  const origAssignee = originalValues["Assignee"] ?? data.issue.assignee;
-  const origPoints = originalValues["Points"] ?? (data.issue.storyPoints !== null ? String(data.issue.storyPoints) : null);
+  const origPriority = "Priority" in originalValues ? originalValues["Priority"] : data.issue.priority;
+  const origAssignee = "Assignee" in originalValues ? originalValues["Assignee"] : data.issue.assignee;
+  const origPoints = "Points" in originalValues ? originalValues["Points"] : (data.issue.storyPoints !== null ? String(data.issue.storyPoints) : null);
   const origSprint = originalValues["Sprint"] ?? null;
   const origType = originalValues["Type"] ?? data.issue.issueType;
 
   const origStatusColor = getStatusColor(origStatus);
-  lines.push(`  ${C.dim}Type:${C.reset} ${origType}    ${C.dim}Priority:${C.reset} ${origPriority}    ${C.dim}Status:${C.reset} ${origStatusColor}${origStatus}${C.reset}`);
+  lines.push(`  ${C.dim}Type:${C.reset} ${origType}    ${C.dim}Priority:${C.reset} ${origPriority || "—"}    ${C.dim}Status:${C.reset} ${origStatusColor}${origStatus}${C.reset}`);
   lines.push(`  ${C.dim}Assignee:${C.reset} ${origAssignee || "—"}    ${C.dim}Sprint:${C.reset} ${origSprint || "—"}    ${C.dim}Points:${C.reset} ${origPoints || "—"}`);
 
   // Initial description, AC, TI — changelog values are wiki markup, issue values are already markdown

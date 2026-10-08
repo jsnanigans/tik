@@ -77,8 +77,9 @@ export type PRAuthorActivity = {
 };
 
 type GhCheckRun = {
-  conclusion: string | null;
-  status: string;
+  conclusion?: string | null;
+  status?: string;
+  state?: string;
 };
 
 type GhPRResponse = {
@@ -116,33 +117,32 @@ type GhPRDetailResponse = {
   statusCheckRollup: GhCheckRun[] | null;
 };
 
+function checkConclusion(check: GhCheckRun): string | null {
+  if (check.state) return check.state === "PENDING" || check.state === "EXPECTED" ? null : check.state;
+  if (check.status !== "COMPLETED") return null;
+  return check.conclusion?.toUpperCase() || null;
+}
+
+export const CHECK_FAILURE_CONCLUSIONS = new Set([
+  "FAILURE",
+  "ERROR",
+  "TIMED_OUT",
+  "CANCELLED",
+  "ACTION_REQUIRED",
+  "STARTUP_FAILURE",
+]);
+
 function computeChecksStatus(checks: GhCheckRun[] | null): PRData["checksStatus"] {
   if (!checks || checks.length === 0) return null;
-
-  const failureConclusions = new Set([
-    "FAILURE",
-    "TIMED_OUT",
-    "CANCELLED",
-    "ACTION_REQUIRED",
-    "STARTUP_FAILURE",
-  ]);
 
   let hasFailure = false;
   let hasPending = false;
 
   for (const check of checks) {
-    if (check.status !== "COMPLETED") {
-      hasPending = true;
-      continue;
-    }
-
-    const conclusion = (check.conclusion || "").toUpperCase();
+    const conclusion = checkConclusion(check);
     if (!conclusion) {
       hasPending = true;
-      continue;
-    }
-
-    if (failureConclusions.has(conclusion)) {
+    } else if (CHECK_FAILURE_CONCLUSIONS.has(conclusion)) {
       hasFailure = true;
     }
   }
@@ -423,38 +423,12 @@ type GhPRSummaryResponse = {
   statusCheckRollup: GhCheckRun[] | null;
 };
 
-async function fetchRepoPRsByAuthor(repo: string): Promise<MyPRSummary[]> {
-  const output = await runCommand([
-    "gh", "pr", "list", "--repo", repo, "--author", "@me",
-    "--state", "all", "--limit", "300",
-    "--json", "number,title,url,headRefName,baseRefName,state,isDraft,updatedAt,reviewDecision,statusCheckRollup",
-  ]);
-  if (!output) return [];
-  try {
-    const prs = JSON.parse(output) as GhPRSummaryResponse[];
-    return prs.map(pr => ({
-      repo,
-      number: pr.number,
-      title: pr.title,
-      url: pr.url,
-      headRefName: pr.headRefName,
-      baseRefName: pr.baseRefName,
-      state: pr.state as MyPRSummary["state"],
-      isDraft: !!pr.isDraft,
-      updatedAt: pr.updatedAt,
-      reviewDecision: (pr.reviewDecision || null) as MyPRSummary["reviewDecision"],
-      checksStatus: computeChecksStatus(pr.statusCheckRollup),
-    }));
-  } catch {
-    return [];
-  }
-}
+type MyPRState = "OPEN" | "MERGED" | "CLOSED" | "all";
 
-async function fetchRepoPRsByAssignee(repo: string): Promise<MyPRSummary[]> {
+async function fetchRepoPRs(repo: string, filter: string[], state: MyPRState): Promise<MyPRSummary[]> {
   const output = await runCommand([
-    "gh", "pr", "list", "--repo", repo,
-    "--search", "assignee:@me",
-    "--state", "all", "--limit", "300",
+    "gh", "pr", "list", "--repo", repo, ...filter,
+    "--state", state.toLowerCase(), "--limit", "300",
     "--json", "number,title,url,headRefName,baseRefName,state,isDraft,updatedAt,reviewDecision,statusCheckRollup",
   ]);
   if (!output) return [];
@@ -480,15 +454,16 @@ async function fetchRepoPRsByAssignee(repo: string): Promise<MyPRSummary[]> {
 
 export async function fetchMyPRs(opts?: {
   repos?: string[];
-  state?: "OPEN" | "MERGED" | "CLOSED" | "all";
+  state?: MyPRState;
 }): Promise<MyPRSummary[]> {
   const repos = opts?.repos ?? getAllMappedRepos();
   if (repos.length === 0) return [];
 
+  const state = opts?.state ?? "all";
   const uniqueRepos = [...new Set(repos)];
   const [authorResults, assigneeResults] = await Promise.all([
-    Promise.all(uniqueRepos.map(r => fetchRepoPRsByAuthor(r))),
-    Promise.all(uniqueRepos.map(r => fetchRepoPRsByAssignee(r))),
+    Promise.all(uniqueRepos.map(r => fetchRepoPRs(r, ["--author", "@me"], state))),
+    Promise.all(uniqueRepos.map(r => fetchRepoPRs(r, ["--search", "assignee:@me"], state))),
   ]);
 
   const seen = new Set<string>();
@@ -498,13 +473,7 @@ export async function fetchMyPRs(opts?: {
     const key = `${prs.repo}#${prs.number}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    all.push(prs);
-  }
-
-  if (opts?.state && opts.state !== "all") {
-    return all.filter(p => p.state === opts.state).sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    );
+    if (state === "all" || prs.state === state) all.push(prs);
   }
 
   return all.sort(
@@ -521,12 +490,12 @@ export function formatPRReviewLabel(pr: PRData): string {
 
 // ─── Detailed PR fetch ─────────────────────────────────────────────
 
-type GhCheckRunResponse = {
+type GhCheckRunResponse = GhCheckRun & {
   __typename?: string;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  detailsUrl: string;
+  name?: string;
+  context?: string;
+  detailsUrl?: string;
+  targetUrl?: string;
   startedAt: string | null;
   completedAt: string | null;
   workflowName?: string;
@@ -573,31 +542,19 @@ function parsePRDetail(raw: GhPRDetailResponseFull): PRDetail {
     .filter((l): l is string => !!l);
 
   const checks: GhCheckRunResponse[] = raw.statusCheckRollup || [];
-  const checkRuns: PRCheckRun[] = checks.map(c => ({
-    name: c.name,
-    workflowName: c.workflowName || c.__typename || "",
-    status: c.status as PRCheckRun["status"],
-    conclusion: c.conclusion,
-    detailsUrl: c.detailsUrl,
-    startedAt: c.startedAt,
-    completedAt: c.completedAt,
-  }));
-
-  const failureConclusions = new Set([
-    "FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE",
-  ]);
-  let hasFailure = false;
-  let hasPending = false;
-  for (const check of checks) {
-    if (check.status !== "COMPLETED") {
-      hasPending = true;
-      continue;
-    }
-    const conclusion = (check.conclusion || "").toUpperCase();
-    if (!conclusion) { hasPending = true; continue; }
-    if (failureConclusions.has(conclusion)) { hasFailure = true; }
-  }
-  const checksStatus: PRDetail["checksStatus"] = hasFailure ? "FAILURE" : hasPending ? "PENDING" : "SUCCESS";
+  const checkRuns: PRCheckRun[] = checks.map(c => {
+    const conclusion = checkConclusion(c);
+    return {
+      name: c.name ?? c.context ?? "",
+      workflowName: c.workflowName || c.__typename || "",
+      status: (c.status ?? (conclusion ? "COMPLETED" : "IN_PROGRESS")) as PRCheckRun["status"],
+      conclusion,
+      detailsUrl: c.detailsUrl ?? c.targetUrl ?? "",
+      startedAt: c.startedAt,
+      completedAt: c.completedAt,
+    };
+  });
+  const checksStatus = computeChecksStatus(checks) ?? "SUCCESS";
 
   // Deduplicate reviews by keeping the latest per reviewer
   const latestReview = new Map<string, PRReview>();

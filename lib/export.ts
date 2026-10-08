@@ -52,13 +52,19 @@ export function formatBytes(bytes: number): string {
 
 /** Keeps embedded bodies from breaking the document outline by pushing their headings below `floor`. */
 export function demoteHeadings(markdown: string, floor: number): string {
-  const levels = [...markdown.matchAll(/^(#{1,6}) /gm)].map((m) => m[1].length);
+  let inFence = false;
+  const lines = markdown.split("\n").map((text) => {
+    if (/^\s*(```|~~~)/.test(text)) inFence = !inFence;
+    const level = inFence ? 0 : (text.match(/^(#{1,6}) /)?.[1].length ?? 0);
+    return { text, level };
+  });
+  const levels = lines.filter((l) => l.level > 0).map((l) => l.level);
   if (levels.length === 0) return markdown;
   const shift = Math.max(0, floor - Math.min(...levels));
   if (shift === 0) return markdown;
-  return markdown.replace(/^(#{1,6}) /gm, (_, hashes: string) =>
-    "#".repeat(Math.min(6, hashes.length + shift)) + " "
-  );
+  return lines
+    .map(({ text, level }) => level > 0 ? "#".repeat(Math.min(6, level + shift)) + text.slice(level) : text)
+    .join("\n");
 }
 
 function cell(value: string | null | undefined): string {
@@ -150,7 +156,7 @@ function attachmentTable(attachments: AttachmentData[], opts: ExportOptions): st
   const lines = ["### Attachments", "", "| Id | Filename | Size | Type | Uploaded by | Created | Local copy |", "|---|---|---|---|---|---|---|"];
   for (const att of attachments) {
     const local = opts.attachmentDir
-      ? `[${att.filename}](${encodeURI(`${opts.attachmentDir}/${att.filename}`)})`
+      ? `[${att.filename}](${`${encodeURI(opts.attachmentDir)}/${encodeURIComponent(att.filename)}`})`
       : `[remote](${att.url})`;
     lines.push(
       `| ${att.id} | \`${att.filename}\` | ${formatBytes(att.size)} | ${cell(att.mimeType)} | ${cell(att.author)} | ${cell(att.created)} | ${local} |`

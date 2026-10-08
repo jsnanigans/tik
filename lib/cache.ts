@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { type IssueData, parseIssue } from "./parser";
-import { getSearchIndex } from "./search";
+import { getSearchIndex, invalidateSearchIndex } from "./search";
 import { getCacheDir } from "./util";
 import { DIMENSIONS, computeContentHash } from "./embeddings";
 import { customFields, localConfig } from "./config";
@@ -22,16 +22,27 @@ export type CacheSearchOpts = {
   project?: string[];
   status?: string[];
   assignee?: string; // "me" | "none" | account_id
+  reporter?: string; // account_id
   currentUserEmail?: string;
+  keys?: string[];
   issueType?: string[];
   priority?: string[];
-  storyPoints?: { op: "=" | ">" | "<" | ">=" | "<="; value: number } | "none" | "any";
+  storyPoints?: Array<{ op: "=" | ">" | "<" | ">=" | "<="; value: number }> | "none" | "any";
   epicKey?: string;
+  parentKey?: string;
+  teamId?: string;
+  sprintId?: number | "none";
+  activeSprintBoardId?: number;
+  excludeDone?: boolean;
   labels?: string[];
   updatedAfter?: string;
   updatedBefore?: string;
+  createdAfter?: string;
+  createdBefore?: string;
+  resolvedAfter?: string;
+  resolvedBefore?: string;
   limit?: number;
-  orderBy?: "updated" | "created" | "key" | "priority";
+  orderBy?: "updated" | "created" | "resolved" | "status" | "key" | "priority";
   orderDir?: "asc" | "desc";
 };
 
@@ -41,8 +52,9 @@ const KNOWN_PROJECTS = [
 const KEY_PATTERN = /^([A-Z]+)-(\d+)$/;
 const SEARCHABLE_TEXT_SQL =
   "i.summary || ' ' || coalesce(i.description, '') || ' ' || coalesce(i.acceptance_criteria, '') || ' ' || coalesce(i.testing_instructions, '')";
+const RESOLVED_SQL = "json_extract(i.raw, '$.fields.resolutiondate')";
 const TEXT_FIELDS = ["summary", "description", "acceptance_criteria", "testing_instructions"];
-const SCHEMA_VERSION = 13; // Bump when schema changes
+const SCHEMA_VERSION = 14; // Bump when schema changes
 const DEFAULT_PROJECT = localConfig.defaultProject;
 const PROJECT_ALIASES = localConfig.projectAliases;
 
@@ -123,7 +135,7 @@ CREATE TRIGGER IF NOT EXISTS issues_ad AFTER DELETE ON issues BEGIN
   VALUES ('delete', OLD.rowid, OLD.key, OLD.summary, OLD.description, OLD.acceptance_criteria, OLD.testing_instructions);
 END;
 
-CREATE TRIGGER IF NOT EXISTS issues_au AFTER UPDATE ON issues BEGIN
+CREATE TRIGGER IF NOT EXISTS issues_au AFTER UPDATE OF key, summary, description, acceptance_criteria, testing_instructions ON issues BEGIN
   INSERT INTO issues_fts(issues_fts, rowid, key, summary, description, acceptance_criteria, testing_instructions)
   VALUES ('delete', OLD.rowid, OLD.key, OLD.summary, OLD.description, OLD.acceptance_criteria, OLD.testing_instructions);
   INSERT INTO issues_fts(rowid, key, summary, description, acceptance_criteria, testing_instructions)
@@ -313,6 +325,7 @@ function getDb(): Database {
 
     db = new Database(getDbPath());
     db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("PRAGMA journal_mode = WAL");
     db.exec(SCHEMA);
     migrateIfNeeded(db);
     seedUsersFromConfig(db);
@@ -606,13 +619,21 @@ function migrateIfNeeded(database: Database): void {
     }
   }
 
+  if (currentVersion < 14) {
+    database.exec(`
+      DROP TRIGGER IF EXISTS issues_au;
+      CREATE TRIGGER issues_au AFTER UPDATE OF key, summary, description, acceptance_criteria, testing_instructions ON issues BEGIN
+        INSERT INTO issues_fts(issues_fts, rowid, key, summary, description, acceptance_criteria, testing_instructions)
+        VALUES ('delete', OLD.rowid, OLD.key, OLD.summary, OLD.description, OLD.acceptance_criteria, OLD.testing_instructions);
+        INSERT INTO issues_fts(rowid, key, summary, description, acceptance_criteria, testing_instructions)
+        VALUES (NEW.rowid, NEW.key, NEW.summary, NEW.description, NEW.acceptance_criteria, NEW.testing_instructions);
+      END;
+    `);
+  }
+
   if (currentVersion < SCHEMA_VERSION) {
     database.run("INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('schema_version', ?)", [SCHEMA_VERSION.toString()]);
   }
-}
-
-export async function initDb(): Promise<Database> {
-  return getDb();
 }
 
 function issueToRow(raw: unknown): Record<string, unknown> | null {
@@ -694,6 +715,7 @@ export async function cacheIssues(rawIssues: unknown[]): Promise<void> {
   });
 
   insertMany(rawIssues);
+  invalidateSearchIndex();
 }
 
 export type FieldChange = {
@@ -854,20 +876,25 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     params.push(...opts.status);
   }
 
+  if (opts.keys) {
+    conditions.push(opts.keys.length > 0 ? `i.key IN (${opts.keys.map(() => "?").join(", ")})` : "0");
+    params.push(...opts.keys);
+  }
+
   // Assignee filter
   if (opts.assignee) {
     if (opts.assignee === "none") {
       conditions.push("i.assignee_id IS NULL");
-    } else if (opts.assignee === "me" && opts.currentUserEmail) {
-      const accountId = await getUserAccountId(opts.currentUserEmail);
-      if (accountId) {
-        conditions.push("i.assignee_id = ?");
-        params.push(accountId);
-      }
-    } else if (opts.assignee !== "me") {
-      conditions.push("i.assignee_id = ?");
-      params.push(opts.assignee);
+    } else {
+      const accountId = opts.assignee === "me" ? await getUserAccountId(opts.currentUserEmail ?? "") : opts.assignee;
+      conditions.push(accountId ? "i.assignee_id = ?" : "0");
+      if (accountId) params.push(accountId);
     }
+  }
+
+  if (opts.reporter) {
+    conditions.push("json_extract(i.raw, '$.fields.reporter.accountId') = ?");
+    params.push(opts.reporter);
   }
 
   // Issue type filter
@@ -891,9 +918,10 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     } else if (opts.storyPoints === "any") {
       conditions.push("i.story_points IS NOT NULL");
     } else {
-      const { op, value } = opts.storyPoints;
-      conditions.push(`i.story_points ${op} ?`);
-      params.push(value);
+      for (const { op, value } of opts.storyPoints) {
+        conditions.push(`i.story_points ${op} ?`);
+        params.push(value);
+      }
     }
   }
 
@@ -901,6 +929,32 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
   if (opts.epicKey) {
     conditions.push("i.epic_key = ?");
     params.push(opts.epicKey);
+  }
+
+  if (opts.parentKey) {
+    conditions.push("i.parent_key = ?");
+    params.push(opts.parentKey);
+  }
+
+  if (opts.teamId) {
+    conditions.push(`coalesce(json_extract(i.raw, '$.fields.${customFields.team}.id'), json_extract(i.raw, '$.fields.${customFields.team}')) = ?`);
+    params.push(opts.teamId);
+  }
+
+  const sprintsSql = `json_each(i.raw, '$.fields.${customFields.sprint}')`;
+  if (opts.sprintId === "none") {
+    conditions.push(`coalesce(json_array_length(i.raw, '$.fields.${customFields.sprint}'), 0) = 0`);
+  } else if (opts.sprintId !== undefined) {
+    conditions.push(`EXISTS (SELECT 1 FROM ${sprintsSql} WHERE json_extract(value, '$.id') = ?)`);
+    params.push(opts.sprintId);
+  }
+  if (opts.activeSprintBoardId !== undefined) {
+    conditions.push(`EXISTS (SELECT 1 FROM ${sprintsSql} WHERE json_extract(value, '$.state') = 'active' AND json_extract(value, '$.boardId') = ?)`);
+    params.push(opts.activeSprintBoardId);
+  }
+
+  if (opts.excludeDone) {
+    conditions.push("coalesce(i.status_category, '') != 'Done'");
   }
 
   // Labels filter
@@ -913,14 +967,19 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
   }
 
   // Date filters
-  if (opts.updatedAfter) {
-    conditions.push("i.updated >= ?");
-    params.push(opts.updatedAfter);
-  }
-  if (opts.updatedBefore) {
-    conditions.push("i.updated <= ?");
-    params.push(opts.updatedBefore);
-  }
+  const addDateRange = (column: string, after?: string, before?: string) => {
+    if (after) {
+      conditions.push(`${column} >= ?`);
+      params.push(after);
+    }
+    if (before) {
+      conditions.push(`${column} <= ?`);
+      params.push(before);
+    }
+  };
+  addDateRange("i.updated", opts.updatedAfter, opts.updatedBefore);
+  addDateRange("i.created", opts.createdAfter, opts.createdBefore);
+  addDateRange(RESOLVED_SQL, opts.resolvedAfter, opts.resolvedBefore);
 
   // Build query
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -929,6 +988,8 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
   const orderMap: Record<string, string> = {
     updated: "i.updated",
     created: "i.created",
+    resolved: RESOLVED_SQL,
+    status: "i.status",
     key: "i.key",
     priority: "i.priority_id",
   };
@@ -949,17 +1010,17 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
   let rows: Row[];
   let scoreMap: Map<string, number> | undefined;
 
+  // If structured filters exist, get matching keys from SQL first
+  let filterKeySet: Set<string> | undefined;
+  if (opts.text && conditions.length > 0) {
+    const filterSql = `SELECT i.key FROM issues i ${whereClause}`;
+    const filterRows = database.query(filterSql).all(...(params as (string | number | null)[])) as Array<{ key: string }>;
+    filterKeySet = new Set(filterRows.map(r => r.key));
+  }
+
   if (useFuzzy) {
     // MiniSearch-based search with BM25+ ranking
     const index = getSearchIndex();
-
-    // If structured filters exist, get matching keys from SQL first
-    let filterKeySet: Set<string> | null = null;
-    if (conditions.length > 0) {
-      const filterSql = `SELECT i.key FROM issues i ${whereClause}`;
-      const filterRows = database.query(filterSql).all(...(params as (string | number | null)[])) as Array<{ key: string }>;
-      filterKeySet = new Set(filterRows.map(r => r.key));
-    }
 
     const searchResults = index.search(fuzzyQuery, {
       fields: parsePartialKey(fuzzyQuery) ? undefined : TEXT_FIELDS,
@@ -996,14 +1057,14 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     if (useFtsRanking) {
       // BM25 weights: key=10, summary=5, description=1, ac=1, ti=1
       // Lower BM25 score = better match, so we sort ASC
-      const ftsCondition = "i.rowid IN (SELECT rowid FROM issues_fts WHERE issues_fts MATCH ?)";
+      const ftsCondition = "issues_fts MATCH ?";
       const ftsWhere = whereClause ? `${whereClause} AND ${ftsCondition}` : `WHERE ${ftsCondition}`;
       params.push(ftsQuery);
 
       const limitClause = `LIMIT ${requestedLimit}`;
       sql = `SELECT i.key, i.summary, i.status, i.project, i.updated, i.raw,
-        (SELECT bm25(issues_fts, 10.0, 5.0, 1.0, 1.0, 1.0) FROM issues_fts WHERE issues_fts.rowid = i.rowid) AS rank
-        FROM issues i ${ftsWhere} ORDER BY rank ${limitClause}`;
+        bm25(issues_fts, 10.0, 5.0, 1.0, 1.0, 1.0) AS rank
+        FROM issues_fts JOIN issues i ON i.rowid = issues_fts.rowid ${ftsWhere} ORDER BY rank ${limitClause}`;
     } else {
       const orderField = orderMap[opts.orderBy || "updated"] || "i.updated";
       const orderDir = opts.orderDir === "asc" ? "ASC" : "DESC";
@@ -1031,12 +1092,13 @@ async function searchCacheInternal(opts: CacheSearchOpts, retried = false): Prom
     updated: row.updated,
     raw: JSON.parse(row.raw),
   }));
-  return { results, scoreMap };
+  return { results, scoreMap, filterKeys: filterKeySet };
 }
 
 export type SearchCacheResult = {
   results: CachedIssue[];
   scoreMap?: Map<string, number>;
+  filterKeys?: Set<string>;
 };
 
 export async function searchCache(opts: CacheSearchOpts, retried = false): Promise<CachedIssue[]> {
@@ -1124,32 +1186,6 @@ export async function getCachedKeys(): Promise<string[]> {
   const database = getDb();
   const rows = database.query("SELECT key FROM issues").all() as Array<{ key: string }>;
   return rows.map(r => r.key);
-}
-
-export function getIdKeyMap(keys: string[]): Map<string, string> {
-  const database = getDb();
-  if (keys.length === 0) return new Map();
-  const placeholders = keys.map(() => "?").join(", ");
-  const rows = database.query(
-    `SELECT key, raw FROM issues WHERE key IN (${placeholders})`
-  ).all(...keys) as Array<{ key: string; raw: string }>;
-  const map = new Map<string, string>();
-  for (const r of rows) {
-    try {
-      const raw = JSON.parse(r.raw);
-      if (raw.id) map.set(String(raw.id), r.key);
-    } catch {}
-  }
-  return map;
-}
-
-export async function clearCache(): Promise<void> {
-  const database = getDb();
-  database.exec("DELETE FROM issues");
-  database.exec("DELETE FROM issues_fts");
-  database.exec("DELETE FROM issue_previous_assignees");
-  database.exec("DELETE FROM user_mapping");
-  database.exec("DELETE FROM sync_meta");
 }
 
 export async function rebuildFtsIndex(): Promise<void> {
@@ -1734,31 +1770,6 @@ export function getUsersByRole(role: string): UserRecord[] {
   return rows.map(rowToUser);
 }
 
-export function upsertUser(user: UserRecord): void {
-  const database = getDb();
-  database.run(`
-    INSERT INTO users (account_id, display_name, email, active, is_main_account, role, team, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(account_id) DO UPDATE SET
-      display_name = excluded.display_name,
-      email = excluded.email,
-      active = excluded.active,
-      is_main_account = excluded.is_main_account,
-      role = excluded.role,
-      team = excluded.team,
-      notes = excluded.notes
-  `, [
-    user.accountId,
-    user.displayName,
-    user.email,
-    user.active ? 1 : 0,
-    user.isMainAccount ? 1 : 0,
-    user.role,
-    user.team,
-    user.notes,
-  ]);
-}
-
 export function upsertUsersFromSync(users: Array<{ accountId: string; displayName: string; email?: string | null; active?: boolean }>): void {
   if (users.length === 0) return;
   const database = getDb();
@@ -2068,6 +2079,14 @@ export function getPageFromCache(id: string): CachedPage | null {
   };
 }
 
+function toFtsQuery(text: string): string {
+  return text
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(term => `"${term.replace(/"/g, '""')}"*`)
+    .join(" ");
+}
+
 export function searchPagesInCache(query: string): CachedPage[] {
   const database = getDb();
   const rows = database.query(`
@@ -2075,7 +2094,7 @@ export function searchPagesInCache(query: string): CachedPage[] {
     JOIN pages_fts f ON p.id = f.id
     WHERE pages_fts MATCH ?
     ORDER BY rank
-  `).all(query) as any[];
+  `).all(toFtsQuery(query)) as any[];
 
   return rows.map(row => ({
     id: row.id,
@@ -2127,7 +2146,7 @@ export function getCachedPRs(opts?: {
   const maxAge = opts?.maxAgeMs ?? PR_CACHE_TTL_MS;
 
   const conditions: string[] = [];
-  const params: unknown[] = [];
+  const params: string[] = [];
 
   // Check freshness: find the newest cached_at across all matching rows
   if (opts?.repos && opts.repos.length > 0) {
@@ -2177,9 +2196,4 @@ export function getCachedPRs(opts?: {
   }));
 
   return { prs, isStale };
-}
-
-export function clearPRCache(): void {
-  const database = getDb();
-  database.run("DELETE FROM pr_cache");
 }

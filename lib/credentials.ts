@@ -1,3 +1,4 @@
+import { chmodSync, writeFileSync } from "fs";
 import { runCommand } from "./util";
 
 export type Credentials = { email: string; token: string };
@@ -15,11 +16,11 @@ async function loadCredentialsFromCache(): Promise<Credentials | null> {
   return null;
 }
 
-async function saveCredentialsToCache(creds: Credentials): Promise<void> {
+function saveCredentialsToCache(creds: Credentials): void {
   try {
-    await Bun.write(getCacheFilePath(), `${creds.email}\n${creds.token}`, {
-      mode: 0o600,
-    });
+    const path = getCacheFilePath();
+    writeFileSync(path, `${creds.email}\n${creds.token}`, { mode: 0o600 });
+    chmodSync(path, 0o600);
   } catch {}
 }
 
@@ -46,7 +47,7 @@ export async function loadCredentials(refresh: boolean): Promise<Credentials> {
   }
 
   const creds = await loadCredentialsFromOp();
-  await saveCredentialsToCache(creds);
+  saveCredentialsToCache(creds);
   return creds;
 }
 

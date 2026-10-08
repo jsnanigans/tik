@@ -1,7 +1,7 @@
 import { C, stripAnsi } from "../lib";
 import { localConfig } from "../lib/config";
 import type { IssueData } from "../lib";
-import type { PRData, PRCheckRun, PRReview, PRMergeStatus } from "../github";
+import { CHECK_FAILURE_CONCLUSIONS, type PRData, type PRCheckRun, type PRReview, type PRMergeStatus } from "../github";
 
 const { statuses } = localConfig;
 
@@ -151,9 +151,9 @@ export function formatCheckRunIcon(run: PRCheckRun): string {
   if (run.status === "COMPLETED") {
     const c = (run.conclusion || "").toUpperCase();
     if (c === "SUCCESS") return `${C.green}✓${C.reset} ${run.name}`;
-    if (c === "FAILURE") return `${C.red}✗${C.reset} ${run.name}`;
     if (c === "TIMED_OUT") return `${C.yellow}⚠${C.reset} ${run.name}`;
-    if (c === "CANCELLED" || c === "SKIPPED") return `${C.dim}−${C.reset} ${run.name}`;
+    if (CHECK_FAILURE_CONCLUSIONS.has(c)) return `${C.red}✗${C.reset} ${run.name}`;
+    if (c === "SKIPPED") return `${C.dim}−${C.reset} ${run.name}`;
     return `${C.dim}?${C.reset} ${run.name}`;
   }
   if (run.status === "IN_PROGRESS") return `${C.yellow}◌${C.reset} ${run.name}`;
@@ -167,9 +167,8 @@ export function formatCheckRunSummary(runs: PRCheckRun[]): string {
     if (r.status !== "COMPLETED") { prog++; continue; }
     const c = (r.conclusion || "").toUpperCase();
     if (c === "SUCCESS") pass++;
-    else if (c === "FAILURE") fail++;
-    else if (c === "SKIPPED" || c === "CANCELLED") skip++;
-    else if (c === "TIMED_OUT") fail++;
+    else if (CHECK_FAILURE_CONCLUSIONS.has(c)) fail++;
+    else if (c === "SKIPPED") skip++;
     else prog++;
   }
   const parts: string[] = [];

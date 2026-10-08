@@ -21,14 +21,14 @@ export type HistoryData = {
   events: HistoryEvent[];
 };
 
-type FullChangelogEntry = {
+export type ChangelogEntry = {
   created: string;
-  author: { displayName: string };
-  items: Array<{ field: string; fromString: string | null; toString: string | null }>;
+  items: Array<{ field: string; fromString: string | null; toString: string | null; from?: string | null; to?: string | null }>;
+  author?: { accountId?: string; displayName?: string; emailAddress?: string };
 };
 
 type ChangelogPage = {
-  values?: FullChangelogEntry[];
+  values?: ChangelogEntry[];
   startAt?: number;
   maxResults?: number;
   total?: number;
@@ -64,8 +64,8 @@ function labelForField(field: string): string {
   return FIELD_LABELS[field] || field;
 }
 
-export async function fetchFullChangelog(creds: Credentials, key: string): Promise<FullChangelogEntry[]> {
-  const entries: FullChangelogEntry[] = [];
+export async function fetchFullChangelog(creds: Credentials, key: string): Promise<ChangelogEntry[]> {
+  const entries: ChangelogEntry[] = [];
   let startAt = 0;
 
   while (true) {
@@ -86,7 +86,7 @@ export async function fetchFullChangelog(creds: Credentials, key: string): Promi
 
 export function parseHistory(
   rawIssue: unknown,
-  changelog: FullChangelogEntry[],
+  changelog: ChangelogEntry[],
 ): HistoryData {
   const issue = parseIssue(rawIssue);
   const fields = getObj(rawIssue, "fields");

@@ -332,7 +332,7 @@ export function IssueListView({
 
         return (
           <Box flexDirection="column" marginTop={1}>
-            <Text>{` ${C.dim}${C.bold}DONE${C.reset} ${C.dim}✓ ${done.length} ollapsed${C.reset}`}</Text>
+            <Text>{` ${C.dim}${C.bold}DONE${C.reset} ${C.dim}✓ ${done.length} collapsed${C.reset}`}</Text>
             <Text>{`   ${C.dim}└─ ${summary}${C.reset}`}</Text>
           </Box>
         );

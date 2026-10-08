@@ -38,7 +38,7 @@ export async function searchCacheHybrid(opts: HybridSearchOpts): Promise<CachedI
   }
 
   // Run keyword search with scores
-  const { results: keywordResults, scoreMap: kwScoreMap } = await searchCacheWithScores(opts);
+  const { results: keywordResults, scoreMap: kwScoreMap, filterKeys } = await searchCacheWithScores(opts);
 
   // Filter marginal keyword results by score
   const topKwScore = kwScoreMap ? Math.max(...kwScoreMap.values(), 0) : 0;
@@ -50,6 +50,7 @@ export async function searchCacheHybrid(opts: HybridSearchOpts): Promise<CachedI
   // Run vector search — brute-force cosine similarity, filtered by minimum threshold
   const vectorScores: Array<{ key: string; score: number }> = [];
   for (const [key, emb] of embeddings) {
+    if (filterKeys && !filterKeys.has(key)) continue;
     const score = cosineSimilarity(queryEmbedding, emb);
     if (score >= MIN_SIMILARITY) {
       vectorScores.push({ key, score });
@@ -97,11 +98,7 @@ export async function searchCacheHybrid(opts: HybridSearchOpts): Promise<CachedI
   if (needFetch.length > 0) {
     const fetched = await Promise.all(needFetch.map((k) => getCachedIssue(k)));
     for (const issue of fetched) {
-      if (!issue) continue;
-      // Apply structured filters to vector-only results
-      if (opts.project?.length && !opts.project.includes(issue.project)) continue;
-      if (opts.status?.length && !opts.status.includes(issue.status)) continue;
-      fetchedMap.set(issue.key, issue);
+      if (issue) fetchedMap.set(issue.key, issue);
     }
   }
 

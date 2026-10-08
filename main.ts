@@ -58,6 +58,7 @@ import {
   resolveKey,
   isValidKey,
   type KeyResolveResult,
+  type MatchedKey,
   getLocalMineIssues,
   getLocalSprintData,
   getWasMineKeys,
@@ -100,6 +101,7 @@ import {
   type PRMergeStatus,
   runCommand,
   runCommandResult,
+  CHECK_FAILURE_CONCLUSIONS,
   fetchPRsForTickets,
   getPRForTicket,
   getPRForBranch,
@@ -145,7 +147,6 @@ import {
   cachePRs,
   getCachedPRs,
 } from "./lib";
-import { invalidateSearchIndex } from "./lib/search";
 import { renderStatic } from "./ui/render";
 import { IssueListView, SearchResultsView, SprintGoalsView, SprintView, SprintSummaryView, LinksView, CommentsView, HelpView } from "./ui/views";
 import { TimelineView } from "./ui/timeline";
@@ -332,7 +333,8 @@ async function fetchRecentTicketChanges(creds: Credentials, hours: number): Prom
   try {
     const byUpdatedBy = `issue in updatedBy(currentUser(), "-${hours}h") ORDER BY updated DESC`;
     return await runQuery(byUpdatedBy);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Error && err.message.includes("(HTTP 400)"))) throw err;
     const fallback = `assignee = currentUser() AND updated >= -${hours}h ORDER BY updated DESC`;
     return await runQuery(fallback);
   }
@@ -708,10 +710,9 @@ async function formatIssues(result: unknown, title?: string, grouped: boolean = 
         const rawIssues = ((result as { issues?: unknown[] }).issues || []);
         const byKey = new Map(issues.map(d => [d.key, d]));
         const doneAtByKey = new Map(getTimelineDates(issues.map(d => d.key)).map(d => [d.key, d.doneAt]));
-        const augmented = rawIssues.map(raw => {
-          const key = (raw as { key?: string }).key;
-          const data = key ? byKey.get(key) : undefined;
-          return data ? { ...(raw as Record<string, unknown>), ...buildIssueJsonFields(data), doneAt: doneAtByKey.get(data.key) ?? null } : raw;
+        const augmented = rawIssues.flatMap(raw => {
+          const data = byKey.get((raw as { key?: string }).key ?? "");
+          return data ? [{ ...(raw as Record<string, unknown>), ...buildIssueJsonFields(data), doneAt: doneAtByKey.get(data.key) ?? null }] : [];
         });
         out(JSON.stringify({ ...(result as object), issues: augmented }, null, 2));
       }
@@ -812,6 +813,26 @@ async function requireTicket(args: string[]): Promise<string> {
   process.exit(1);
 }
 
+function reportResolvedKey(original: string, key: string): void {
+  if (globalFormat === "table") out(`${C.dim}Resolved${C.reset} ${original} ${C.dim}→${C.reset} ${formatProjectKey(key)}`);
+}
+
+async function selectAmbiguousKey(original: string, matches: MatchedKey[]): Promise<string | null> {
+  if (globalFormat !== "table") {
+    emitError("ambiguous_key", `Multiple matches for '${original}'`, {
+      matches: matches.map(m => ({ key: m.key, summary: m.summary })),
+    });
+  }
+  return promptSelect(
+    `${C.yellow}Multiple matches for '${original}':${C.reset}`,
+    matches.map(match => ({
+      value: match.key,
+      label: formatProjectKey(match.key),
+      description: truncate(match.summary, 60),
+    }))
+  );
+}
+
 async function resolveTicketKey(input: string): Promise<string> {
   const result = await resolveKey(input);
 
@@ -820,48 +841,14 @@ async function resolveTicketKey(input: string): Promise<string> {
       return result.key;
 
     case "resolved":
-      out(`${C.dim}Resolved${C.reset} ${result.original} ${C.dim}→${C.reset} ${formatProjectKey(result.key)}`);
+      reportResolvedKey(result.original, result.key);
       return result.key;
 
     case "multiple": {
-      if (globalFormat === "table") {
-        const selected = await promptSelect(
-          `${C.yellow}Multiple matches for '${result.original}':${C.reset}`,
-          result.matches.map(match => ({
-            value: match.key,
-            label: formatProjectKey(match.key),
-            description: truncate(match.summary, 60),
-          }))
-        );
-        if (selected) return selected;
-        console.error(`${C.red}Invalid selection${C.reset}`);
-        process.exit(1);
-      } else {
-        out(`${C.yellow}Multiple matches for '${result.original}':${C.reset}`);
-        for (let i = 0; i < result.matches.length; i++) {
-          const m = result.matches[i];
-          out(`  ${C.dim}[${i + 1}]${C.reset} ${formatProjectKey(m.key)}  ${C.dim}${truncate(m.summary, 50)}${C.reset}`);
-        }
-
-        const readline = await import("readline");
-        const rl = readline.createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
-
-        const answer = await new Promise<string>((resolve) => {
-          rl.question(`${C.dim}Select [1-${result.matches.length}]:${C.reset} `, resolve);
-        });
-        rl.close();
-
-        const choice = parseInt(answer.trim(), 10);
-        if (choice >= 1 && choice <= result.matches.length) {
-          return result.matches[choice - 1].key;
-        }
-
-        console.error(`${C.red}Invalid selection${C.reset}`);
-        process.exit(1);
-      }
+      const selected = await selectAmbiguousKey(result.original, result.matches);
+      if (selected) return selected;
+      console.error(`${C.red}Invalid selection${C.reset}`);
+      process.exit(1);
     }
 
     case "invalid":
@@ -879,29 +866,11 @@ async function maybeResolveTicketKey(input: string): Promise<string | null> {
       return result.key;
 
     case "resolved":
-      out(`${C.dim}Resolved${C.reset} ${result.original} ${C.dim}→${C.reset} ${formatProjectKey(result.key)}`);
+      reportResolvedKey(result.original, result.key);
       return result.key;
 
-    case "multiple": {
-      if (globalFormat === "table") {
-        const selected = await promptSelect(
-          `${C.yellow}Multiple matches for '${result.original}':${C.reset}`,
-          result.matches.map(match => ({
-            value: match.key,
-            label: formatProjectKey(match.key),
-            description: truncate(match.summary, 60),
-          }))
-        );
-        return selected || null;
-      }
-
-      out(`${C.yellow}Multiple matches for '${result.original}':${C.reset}`);
-      for (let i = 0; i < result.matches.length; i++) {
-        const m = result.matches[i];
-        out(`  ${C.dim}[${i + 1}]${C.reset} ${formatProjectKey(m.key)}  ${C.dim}${truncate(m.summary, 50)}${C.reset}`);
-      }
-      return null;
-    }
+    case "multiple":
+      return selectAmbiguousKey(result.original, result.matches);
 
     case "invalid":
       return null;
@@ -933,7 +902,7 @@ async function confirmAction(prompt: string): Promise<boolean> {
   return normalized === "y" || normalized === "yes";
 }
 
-async function createTicketRecord(creds: Credentials, options: {
+type CreateTicketOptions = {
   summary: string;
   project?: string;
   description?: string;
@@ -946,7 +915,12 @@ async function createTicketRecord(creds: Credentials, options: {
   points?: string;
   acceptanceCriteria?: string;
   testingInstructions?: string;
-}): Promise<CreatedTicket> {
+};
+
+async function buildCreateFields(creds: Credentials, options: CreateTicketOptions): Promise<{
+  summary: string;
+  fields: Record<string, unknown>;
+}> {
   const summaryText = await readFileArg(options.summary);
   const summary = summaryText.trim().split("\n")[0];
   const project = options.project || Config.defaultProject;
@@ -976,12 +950,14 @@ async function createTicketRecord(creds: Credentials, options: {
 
   if (typeof options.priority === "string") {
     const priorityId = PriorityMap[options.priority.toLowerCase()];
-    if (priorityId) fields.priority = { id: priorityId };
+    if (!priorityId) emitError("invalid_priority", `Invalid priority '${options.priority}' (use 1-5 or a name)`);
+    fields.priority = { id: priorityId };
   }
 
   if (typeof options.points === "string") {
     const pts = parseFloat(options.points);
-    if (!isNaN(pts)) fields[requireCustomField("storyPoints")] = pts;
+    if (isNaN(pts)) emitError("invalid_points", `Invalid points '${options.points}'`);
+    fields[requireCustomField("storyPoints")] = pts;
   }
 
   if (typeof options.acceptanceCriteria === "string") {
@@ -996,16 +972,23 @@ async function createTicketRecord(creds: Credentials, options: {
 
   if (typeof options.sprint === "string") {
     const sprintId = parseInt(options.sprint, 10);
-    if (!isNaN(sprintId)) fields[requireCustomField("sprint")] = sprintId;
+    if (isNaN(sprintId)) emitError("invalid_sprint", `Invalid sprint '${options.sprint}' (use a sprint ID)`);
+    fields[requireCustomField("sprint")] = sprintId;
   } else if (options.sprint) {
     const sprintResp = (await jiraGet(
       creds,
       `/rest/agile/1.0/board/${Config.myBoardId}/sprint?state=active`
     )) as { values?: { id: number }[] };
     const activeSprint = sprintResp.values?.[0];
-    if (activeSprint) fields[requireCustomField("sprint")] = activeSprint.id;
+    if (!activeSprint) emitError("no_active_sprint", "No active sprint found on your board");
+    fields[requireCustomField("sprint")] = activeSprint.id;
   }
 
+  return { summary, fields };
+}
+
+async function createTicketRecord(creds: Credentials, options: CreateTicketOptions): Promise<CreatedTicket> {
+  const { summary, fields } = await buildCreateFields(creds, options);
   const result = (await jiraPost(creds, "/rest/api/3/issue", { fields })) as {
     key?: string;
     errors?: unknown;
@@ -1016,20 +999,30 @@ async function createTicketRecord(creds: Credentials, options: {
     throw new Error(`Error creating issue: ${JSON.stringify(result.errors || result)}`);
   }
 
+  let transitionError = "";
   if (options.inProgress) {
-    await jiraPost(creds, `/rest/api/3/issue/${newKey}/transitions`, {
-      transition: { id: Config.inProgressTransitionId },
-    });
+    try {
+      await jiraPost(creds, `/rest/api/3/issue/${newKey}/transitions`, {
+        transition: { id: Config.inProgressTransitionId },
+      });
+    } catch (err) {
+      transitionError = (err as Error).message;
+    }
   }
 
   const createdIssue = await jiraGet(creds, `/rest/api/3/issue/${newKey}`);
   await cacheSingleIssue(createdIssue);
+  const url = `${Config.jiraBase}/browse/${newKey}`;
+
+  if (transitionError) {
+    emitError("transition_failed", `Created ${newKey} (${url}) but could not move it to In Progress: ${transitionError}`, { key: newKey, url });
+  }
 
   return {
     key: newKey,
     summary,
     status: parseIssue(createdIssue).status,
-    url: `${Config.jiraBase}/browse/${newKey}`,
+    url,
   };
 }
 
@@ -1104,7 +1097,6 @@ async function prepareFeatureBranch(repoRoot: string, ticketKey: string, baseBra
   if (!exists) {
     await runCheckedCommand(["git", "branch", branchName, baseBranch], repoRoot, `Failed to create ${branchName}`);
   }
-  await runCheckedCommand(["git", "switch", baseBranch], repoRoot, `Failed to return to ${baseBranch}`);
   return branchName;
 }
 
@@ -1316,20 +1308,6 @@ async function cmdFlowPR(creds: Credentials, args: {
     }
 
     if (existing) {
-      await upsertFlowState({
-        ticketKey: key,
-        branchName,
-        repo,
-        jiraSummary: parsed.summary,
-        jiraStatus: parsed.status || null,
-        prNumber: existing.number,
-        prTitle: existing.title,
-        prUrl: existing.url,
-        prState: existing.state,
-        prIsDraft: existing.isDraft,
-        prReviewDecision: existing.reviewDecision,
-        prChecksStatus: existing.checksStatus,
-      });
       clearLoading();
       if (globalFormat === "json") {
         out(JSON.stringify({ key, pr: existing }, null, 2));
@@ -1422,9 +1400,7 @@ async function cmdFlowStatus(creds: Credentials, args: { key?: string; force?: b
   const flowState = !force ? await getFlowStateForBranch(key, branchName) : null;
   const cachedIssue = !force ? await getCachedIssue(key) : null;
   const cachedPR = flowStateToPR(flowState);
-  const pr = repo
-    ? (isOpenPRForBranch(cachedPR, branchName) ? cachedPR : await getPRForBranch(repo, branchName))
-    : undefined;
+  const pr = repo ? (await getPRForBranch(repo, branchName)) ?? cachedPR : undefined;
   let parsed: IssueData;
   if (cachedIssue) {
     parsed = parseIssue(cachedIssue.raw);
@@ -1508,6 +1484,70 @@ async function cmdFlowStatus(creds: Credentials, args: { key?: string; force?: b
   out(`${C.dim}CI:${C.reset} ${formatPRChecksLabel(pr)}`);
 }
 
+function relativeDate(amount: number, unit: string): string {
+  const date = new Date();
+  switch (unit) {
+    case "d": date.setDate(date.getDate() - amount); break;
+    case "h": date.setHours(date.getHours() - amount); break;
+    case "w": date.setDate(date.getDate() - amount * 7); break;
+    case "m": date.setMonth(date.getMonth() - amount); break;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function parseDateFilter(flag: string, value: string): { after?: string; before?: string } {
+  const relative = value.match(/^-(\d+)([dhwm])$/);
+  if (relative) return { after: relativeDate(Number(relative[1]), relative[2]) };
+  const [after, before] = value.split("..");
+  const isDate = (s?: string) => !s || /^\d{4}-\d{2}-\d{2}/.test(s);
+  if ((!after && !before) || !isDate(after) || !isDate(before)) {
+    emitError("invalid_date", `Invalid --${flag} '${value}'. Use -7d, -24h, -2w, -3m, 2024-01-01 or 2024-01-01..2024-02-01.`);
+  }
+  return { after: after || undefined, before: before || undefined };
+}
+
+function parsePointsFilter(value: string): CacheSearchOpts["storyPoints"] {
+  const pts = value.toLowerCase();
+  if (pts === "none" || pts === "any") return pts;
+  const comparison = pts.match(/^(<=|>=|<|>)?(\d+(?:\.\d+)?)$/);
+  if (comparison) {
+    return [{ op: (comparison[1] || "=") as "=" | ">" | "<" | ">=" | "<=", value: Number(comparison[2]) }];
+  }
+  const range = pts.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/);
+  if (range) return [{ op: ">=", value: Number(range[1]) }, { op: "<=", value: Number(range[2]) }];
+  emitError("invalid_points", `Invalid --points '${value}'. Use 3, >0, >=2, 1-5, none or any.`);
+}
+
+function parseLimit(args: Record<string, unknown>, fallback: number): number {
+  if (typeof args.m !== "string") return fallback;
+  if (!/^\d+$/.test(args.m) || Number(args.m) === 0) emitError("invalid_limit", `Invalid -m '${args.m}'. Use a positive integer.`);
+  return Number(args.m);
+}
+
+async function resolvePersonArg(value: string, creds: Credentials): Promise<string> {
+  if (value === "none") return value;
+  if (value === "me") {
+    let accountId = await getUserAccountId(creds.email);
+    if (!accountId) {
+      const me = await jiraGet(creds, "/rest/api/3/myself") as { accountId?: string };
+      if (me.accountId) {
+        accountId = me.accountId;
+        await cacheUserMapping(creds.email, accountId);
+      }
+    }
+    if (!accountId) emitError("unknown_user", "Could not resolve your account ID. Run tik sync.");
+    return accountId;
+  }
+  const matches = findUserByNameOrId(value);
+  if (matches.length > 1) {
+    emitError("ambiguous_user", `'${value}' matches ${matches.map(u => u.displayName).join(", ")}. Be more specific.`);
+  }
+  if (matches.length === 0 && !/^([0-9a-f]{24}|\d+:[0-9a-f-]{36})$/i.test(value)) {
+    emitError("unknown_user", `No user found matching '${value}'. Run tik sync or pass an account ID.`);
+  }
+  return matches[0]?.accountId ?? value;
+}
+
 async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials, defaultLimit = 50): Promise<CacheSearchOpts> {
   const opts: CacheSearchOpts = {
     currentUserEmail: creds.email,
@@ -1525,9 +1565,12 @@ async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials
     opts.contains = args.contains;
   }
 
-  // Fuzzy search mode (enabled by default, can be disabled with --no-fuzzy)
-  opts.fuzzy = args["no-fuzzy"] ? false : true;
-  opts.minScore = typeof args["min-score"] === "string" ? parseInt(args["min-score"], 10) : 30;
+  opts.fuzzy = !isDisabled(args, "fuzzy");
+  opts.minScore = 30;
+  if (typeof args["min-score"] === "string") {
+    if (!/^\d+$/.test(args["min-score"])) emitError("invalid_min_score", `Invalid --min-score '${args["min-score"]}'. Use an integer percentage.`);
+    opts.minScore = Number(args["min-score"]);
+  }
 
   // Project filter
   if (typeof args.p === "string") {
@@ -1539,21 +1582,12 @@ async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials
     opts.status = args.s.split(",").map(s => s.trim());
   }
 
-  // Assignee filter - for "me", we need to resolve the account ID
   if (typeof args.a === "string") {
-    if (args.a === "me") {
-      let accountId = await getUserAccountId(creds.email);
-      if (!accountId) {
-        const me = await jiraGet(creds, "/rest/api/3/myself") as { accountId?: string };
-        if (me.accountId) {
-          accountId = me.accountId;
-          await cacheUserMapping(creds.email, accountId);
-        }
-      }
-      opts.assignee = accountId ? accountId : "me";
-    } else {
-      opts.assignee = args.a;
-    }
+    opts.assignee = await resolvePersonArg(args.a, creds);
+  }
+  const reporterArg = args["my-created"] ? "me" : args.r;
+  if (typeof reporterArg === "string") {
+    opts.reporter = await resolvePersonArg(reporterArg, creds);
   }
 
   // Issue type filter (from -t or --type) - title-case for DB match
@@ -1575,29 +1609,36 @@ async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials
     opts.priority = [prio];
   }
 
-  // Story points filter
   if (typeof args.points === "string") {
-    const pts = args.points.toLowerCase();
-    if (pts === "none") {
-      opts.storyPoints = "none";
-    } else if (pts === "any") {
-      opts.storyPoints = "any";
-    } else if (pts.startsWith(">=")) {
-      opts.storyPoints = { op: ">=", value: parseFloat(pts.slice(2)) };
-    } else if (pts.startsWith("<=")) {
-      opts.storyPoints = { op: "<=", value: parseFloat(pts.slice(2)) };
-    } else if (pts.startsWith(">")) {
-      opts.storyPoints = { op: ">", value: parseFloat(pts.slice(1)) };
-    } else if (pts.startsWith("<")) {
-      opts.storyPoints = { op: "<", value: parseFloat(pts.slice(1)) };
-    } else {
-      opts.storyPoints = { op: "=", value: parseFloat(pts) };
-    }
+    opts.storyPoints = parsePointsFilter(args.points);
   }
 
   // Epic filter
   if (typeof args.epic === "string") {
     opts.epicKey = args.epic;
+  }
+  if (typeof args.parent === "string") {
+    opts.parentKey = args.parent.toUpperCase();
+  }
+
+  if (args["my-team"]) {
+    requireCustomField("team");
+    opts.teamId = Config.myTeamId;
+  }
+
+  if (typeof args.sprint === "string") {
+    requireCustomField("sprint");
+    if (args.sprint !== "none" && !/^\d+$/.test(args.sprint)) emitError("invalid_sprint", `Invalid --sprint '${args.sprint}'. Use a sprint ID or 'none'.`);
+    opts.sprintId = args.sprint === "none" ? "none" : Number(args.sprint);
+  }
+  if (args["current-sprint"]) {
+    requireCustomField("sprint");
+    opts.activeSprintBoardId = getMyBoardId();
+  }
+  if (args.backlog) {
+    requireCustomField("sprint");
+    opts.sprintId = "none";
+    opts.excludeDone = true;
   }
 
   // Labels filter
@@ -1605,47 +1646,36 @@ async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials
     opts.labels = args.l.split(",").map(l => l.trim());
   }
 
-  // Updated date filter (convert relative dates to ISO)
   if (typeof args.updated === "string") {
-    const val = args.updated;
-    if (val.startsWith("-")) {
-      const match = val.match(/^-(\d+)([dhwm])$/);
-      if (match) {
-        const num = parseInt(match[1], 10);
-        const unit = match[2];
-        const now = new Date();
-        switch (unit) {
-          case "d": now.setDate(now.getDate() - num); break;
-          case "h": now.setHours(now.getHours() - num); break;
-          case "w": now.setDate(now.getDate() - num * 7); break;
-          case "m": now.setMonth(now.getMonth() - num); break;
-        }
-        opts.updatedAfter = now.toISOString().slice(0, 10);
-      }
-    } else if (val.includes("..")) {
-      const [start, end] = val.split("..");
-      opts.updatedAfter = start;
-      opts.updatedBefore = end;
-    } else {
-      opts.updatedAfter = val;
-    }
+    const { after, before } = parseDateFilter("updated", args.updated);
+    opts.updatedAfter = after;
+    opts.updatedBefore = before;
+  }
+  if (typeof args.stale === "string") {
+    if (!/^\d+$/.test(args.stale)) emitError("invalid_stale", `Invalid --stale '${args.stale}'. Use a number of days.`);
+    opts.updatedBefore = relativeDate(Number(args.stale), "d");
+  }
+  if (typeof args.created === "string") {
+    const { after, before } = parseDateFilter("created", args.created);
+    opts.createdAfter = after;
+    opts.createdBefore = before;
+  }
+  if (typeof args.resolved === "string") {
+    const { after, before } = parseDateFilter("resolved", args.resolved);
+    opts.resolvedAfter = after;
+    opts.resolvedBefore = before;
   }
 
   // Sorting
   if (typeof args.sort === "string") {
-    const sortMap: Record<string, "updated" | "created" | "key" | "priority"> = {
-      updated: "updated",
-      created: "created",
-      key: "key",
-      priority: "priority",
-    };
-    opts.orderBy = sortMap[args.sort.toLowerCase()] || "updated";
+    const sortFields = ["updated", "created", "resolved", "status", "key", "priority"] as const;
+    const sort = sortFields.find(field => field === (args.sort as string).toLowerCase());
+    if (!sort) emitError("invalid_sort", `Invalid --sort '${args.sort}'. Use ${sortFields.join(", ")}.`);
+    opts.orderBy = sort;
   }
   opts.orderDir = args.asc ? "asc" : "desc";
 
-  // Limit
-  const fallbackLimit = opts.contains ? Number.MAX_SAFE_INTEGER : defaultLimit;
-  opts.limit = typeof args.m === "string" ? parseInt(args.m, 10) || fallbackLimit : fallbackLimit;
+  opts.limit = parseLimit(args, opts.contains ? Number.MAX_SAFE_INTEGER : defaultLimit);
 
   return opts;
 }
@@ -1656,10 +1686,12 @@ async function runContainsAny(source: string): Promise<void> {
   out(JSON.stringify(Object.fromEntries(findIssuesContaining(tokens)), null, 2));
 }
 
-async function runLocalSearch(args: Record<string, unknown>, creds: Credentials, localOnly = true): Promise<void> {
+async function runLocalSearch(args: Record<string, unknown>, creds: Credentials, jqlKeys?: string[]): Promise<void> {
   const opts = await buildSearchOpts(args, creds);
+  opts.keys = jqlKeys;
+  const localOnly = !jqlKeys;
 
-  const noSemantic = !!args["no-semantic"];
+  const noSemantic = isDisabled(args, "semantic");
   const hybridOpts: HybridSearchOpts = { ...opts, noSemantic };
 
   const loadingMsg = localOnly ? "Searching local cache..." : "Ranking results...";
@@ -1925,6 +1957,7 @@ async function cmdLog(creds: Credentials, args: Record<string, unknown>): Promis
   if (isSprint) {
     const localData = getLocalSprintData(getMyBoardId());
     if (!localData) {
+      if (globalFormat !== "table") emitError("no_active_sprint", "No active sprint found in cache. Run tik sync first.");
       out(`${C.yellow}No active sprint found in cache.${C.reset} Run ${C.bold}tik sync${C.reset} first.`);
       return;
     }
@@ -1945,14 +1978,15 @@ async function cmdLog(creds: Credentials, args: Record<string, unknown>): Promis
   let filteredIssues = issues;
   if (isSprint && !showAll) {
     const wasMine = getWasMineKeys(accountId, issues.map(i => i.key));
+    const qaAccountIds = getQaAccountIds();
     filteredIssues = issues.filter(i =>
       i.assigneeId === accountId ||
-      (wasMine.has(i.key) && i.assigneeId && getQaAccountIds()?.has(i.assigneeId))
+      (wasMine.has(i.key) && i.assigneeId && qaAccountIds.has(i.assigneeId))
     );
   }
 
   const keys = filteredIssues.map(i => i.key);
-  if (keys.length === 0) {
+  if (keys.length === 0 && globalFormat === "table") {
     out(`${C.dim}No tickets found.${C.reset}`);
     return;
   }
@@ -1971,7 +2005,7 @@ async function cmdLog(creds: Credentials, args: Record<string, unknown>): Promis
   const changes = changelogEntriesToSyncChanges(entries, issueMetaMap);
 
   if (changes.length === 0) {
-    out(`${C.dim}No changes in the last ${hours}h.${C.reset}`);
+    if (globalFormat === "table") out(`${C.dim}No changes in the last ${hours}h.${C.reset}`);
     return;
   }
 
@@ -2002,24 +2036,18 @@ function extractUsersFromIssues(rawIssues: unknown[]): Array<{ accountId: string
 async function runSync(creds: Credentials, opts?: {
   projects?: string[];
   fullSync?: boolean;
-  includeDone?: boolean;
-}): Promise<void> {
+}): Promise<{ fetched: number; changed: number }> {
   const projects = opts?.projects ?? [...Config.syncProjects];
   const fullSync = opts?.fullSync ?? false;
-  const includeDone = opts?.includeDone ?? true;
   const lastSync = fullSync ? null : await getLastSyncTime();
 
   const conditions: string[] = [];
   conditions.push(`project IN (${projects.join(", ")})`);
   if (lastSync) {
-    const date = new Date(lastSync);
-    const jiraDate = date.toISOString().replace("T", " ").replace("Z", "").slice(0, 16);
-    conditions.push(`updated >= "${jiraDate}"`);
+    const safetyMarginMinutes = 5;
+    const minutesSince = Math.ceil((Date.now() - new Date(lastSync).getTime()) / 60_000) + safetyMarginMinutes;
+    conditions.push(`updated >= -${minutesSince}m`);
   }
-  if (!includeDone) {
-    conditions.push(`status NOT IN (${DoneStatusesJql})`);
-  }
-
   const jql = `${conditions.join(" AND ")} ORDER BY updated DESC`;
   const syncStartTime = new Date().toISOString();
   const batchSize = 100;
@@ -2033,10 +2061,10 @@ async function runSync(creds: Credentials, opts?: {
 
   const modeLabel = lastSync
     ? `Incremental since ${formatRelativeDate(lastSync)}`
-    : `Full sync${includeDone ? "" : " (open only)"}`;
+    : "Full sync";
 
-  const progress = new SyncProgress(modeLabel);
-  progress.startPhase("tickets");
+  const progress = globalFormat === "table" ? new SyncProgress(modeLabel) : null;
+  progress?.startPhase("tickets");
 
   try {
     do {
@@ -2056,7 +2084,7 @@ async function runSync(creds: Credentials, opts?: {
         }
         totalFetched += result.issues.length;
       }
-      progress.update(totalFetched, totalIssues);
+      progress?.update(totalFetched, totalIssues);
       nextPageToken = result.nextPageToken;
     } while (nextPageToken);
 
@@ -2069,9 +2097,9 @@ async function runSync(creds: Credentials, opts?: {
 
     const timelineKeys = fullSync ? await getCachedKeys() : syncedKeys;
     if (timelineKeys.length > 0) {
-      progress.startPhase("changelogs");
+      progress?.startPhase("changelogs");
       await syncTimelineDates(creds, timelineKeys, (fetched, total) => {
-        progress.update(fetched, total);
+        progress?.update(fetched, total);
       });
     }
 
@@ -2080,9 +2108,9 @@ async function runSync(creds: Credentials, opts?: {
     try {
       const ollamaUp = await isOllamaAvailable();
       if (ollamaUp) {
-        progress.startPhase("embeddings");
+        progress?.startPhase("embeddings");
         embeddedCount = await syncEmbeddings((done, total) => {
-          progress.update(done, total);
+          progress?.update(done, total);
         });
         if (embeddedCount > 0) invalidateEmbeddingCache();
       }
@@ -2099,13 +2127,16 @@ async function runSync(creds: Credentials, opts?: {
       : `${C.green}✓${C.reset} Synced ${parts.join(", ")}`;
 
     await setLastSyncTime(syncStartTime);
-    invalidateSearchIndex();
-    await progress.done(doneMsg);
+    await progress?.done(doneMsg);
   } catch (err) {
-    const errorMsg = `${C.red}Error:${C.reset} ${err instanceof Error ? err.message : String(err)}`;
-    await progress.error(errorMsg);
+    const message = err instanceof Error ? err.message : String(err);
+    if (!progress) emitError("sync_failed", message);
+    await progress.error(`${C.red}Error:${C.reset} ${message}`);
     process.exit(1);
   }
+
+  const result = { fetched: totalFetched, changed: allChanges.length };
+  if (!progress) return result;
 
   if (isIncremental) {
     if (allChanges.length > 0) {
@@ -2121,6 +2152,7 @@ async function runSync(creds: Credentials, opts?: {
 
   const stats = await getCacheStats();
   out(`${C.dim}Total in cache: ${stats.totalIssues}${C.reset}`);
+  return result;
 }
 
 async function ensureCacheOrFresh(creds: Credentials, args: Record<string, unknown>): Promise<void> {
@@ -2155,8 +2187,7 @@ async function cmdPrio(creds: Credentials): Promise<void> {
   const sprints = sprintResp.values || [];
   if (sprints.length === 0) {
     clearLoading();
-    out("No active sprint found");
-    process.exit(1);
+    emitError("no_active_sprint", "No active sprint found");
   }
 
   const sprint = parseSprint(sprints[0]);
@@ -2212,7 +2243,8 @@ async function cmdPrio(creds: Credentials): Promise<void> {
 async function cmdTriage(creds: Credentials, _showAll: boolean): Promise<void> {
   const fetchIssues = async () => {
     const qaIdList = [...getQaAccountIds()].map(id => `"${id}"`).join(", ");
-    const jql = `(assignee=currentUser() AND status not in (${DoneStatusesJql})) OR (assignee WAS currentUser() AND assignee in (${qaIdList}) AND status not in (${DoneStatusesJql})) ORDER BY updated DESC`;
+    const qaClause = qaIdList ? ` OR (assignee WAS currentUser() AND assignee in (${qaIdList}) AND status not in (${DoneStatusesJql}))` : "";
+    const jql = `(assignee=currentUser() AND status not in (${DoneStatusesJql}))${qaClause} ORDER BY updated DESC`;
 
     const [issuesResult, sprintResp] = await Promise.all([
       jiraSearch(creds, jql, 50) as Promise<{ issues?: unknown[] }>,
@@ -2267,7 +2299,13 @@ async function cmdStart(creds: Credentials, args: string[]): Promise<void> {
   });
 
   clearLoading();
-  out(`${C.green}✓${C.reset} ${formatProjectKey(key)} → ${C.yellow}In Progress${C.reset}`);
+  outTransitioned(key, "In Progress", C.yellow);
+}
+
+function outTransitioned(key: string, status: string, color: string): void {
+  if (globalFormat === "json") out(JSON.stringify({ key, status }, null, 2));
+  else if (globalFormat === "plain") out(key);
+  else out(`${C.green}✓${C.reset} ${formatProjectKey(key)} → ${color}${status}${C.reset}`);
 }
 
 async function cmdReview(creds: Credentials, args: string[], options: { gateCI?: boolean } = {}): Promise<void> {
@@ -2279,10 +2317,7 @@ async function cmdReview(creds: Credentials, args: string[], options: { gateCI?:
     clearLoading();
 
     const gate = validateReviewGate(pr);
-    if (!gate.ok) {
-      console.error(`${C.red}✗${C.reset} ${gate.message} for ${formatProjectKey(key)}`);
-      process.exit(1);
-    }
+    if (!gate.ok) emitError("review_gate_failed", `${gate.message} for ${key}`);
   }
 
   showLoading(`Moving ${key} to review...`);
@@ -2292,7 +2327,7 @@ async function cmdReview(creds: Credentials, args: string[], options: { gateCI?:
   });
 
   clearLoading();
-  out(`${C.green}✓${C.reset} ${formatProjectKey(key)} → ${C.cyan}${localConfig.statuses.reviewName}${C.reset}`);
+  outTransitioned(key, localConfig.statuses.reviewName, C.cyan);
 }
 
 async function renderPROverview(key: string, detail: PRDetail): Promise<void> {
@@ -2350,7 +2385,7 @@ async function renderPRCI(detail: PRDetail): Promise<void> {
 
       if (run.status === "COMPLETED") {
         const c = (run.conclusion || "").toUpperCase();
-        if (c === "FAILURE" || c === "TIMED_OUT") {
+        if (CHECK_FAILURE_CONCLUSIONS.has(c)) {
           failures.push(run);
         }
       }
@@ -2384,12 +2419,10 @@ async function renderPRReviews(detail: PRDetail): Promise<void> {
   out(`  ${C.dim}Review Decision:${C.reset} ${decisionLabel}`);
   out("");
 
-  const authorPad = Math.max(...detail.reviews.map(r => r.author.length + 3), 12);
   const statePad = 20;
 
   for (const review of detail.reviews) {
     const icon = formatReviewIcon(review);
-    const authorPadded = review.author.padEnd(authorPad);
     const stateFormatted = review.state.replace(/_/g, " ").padEnd(statePad);
     const bodyExcerpt = review.body
       ? `"${review.body.replace(/\n/g, " ").slice(0, 40)}${review.body.length > 40 ? "…" : ""}"`
@@ -2590,7 +2623,6 @@ async function cmdPR(args: string[], mode: { showCI?: boolean; showReviews?: boo
       out(`${key}\t${fallbackPR.number}\t${fallbackPR.state}\t${fallbackPR.reviewDecision || ""}\t${fallbackPR.checksStatus || ""}\t${fallbackPR.url}`);
       return;
     }
-    const ms = detail.mergeStatus;
     out(`${key}\t${detail.number}\t${detail.state}\t${detail.reviewDecision || ""}\t${detail.checksStatus || ""}\t${detail.mergeStatus.mergeable}\t${detail.mergeStatus.mergeStateStatus}\t${detail.url}`);
     return;
   }
@@ -2694,9 +2726,8 @@ async function fetchMyPRsWithCache(opts: {
     state: opts.state,
   });
 
-  // Cache the results (store all states so future queries with different state filters can hit)
-  // Store full unfiltered set so cached queries with different state/repo filters work
-  if (prs.length > 0) {
+  // Only an unfiltered fetch is the full set that cached reads filter by state
+  if (prs.length > 0 && (!opts.state || opts.state === "all")) {
     cachePRs(prs.map(pr => ({
       repo: pr.repo,
       number: pr.number,
@@ -2826,11 +2857,16 @@ async function cmdMyPRs(args: {
 
     // If detail flags are set, fetch and show details for each PR
     if (showDetails) {
-      for (const pr of prs) {
+      const details: (PRDetail | undefined)[] = [];
+      for (let i = 0; i < prs.length; i += 8) {
+        const chunk = prs.slice(i, i + 8);
+        details.push(...await Promise.all(chunk.map(pr => fetchPRDetail(pr.repo, pr.number))));
+      }
+      for (const [i, pr] of prs.entries()) {
         out("");
         const sepLen = process.stdout.columns ? Math.min(process.stdout.columns - 1, 80) : 60;
         out(`${C.dim}${String.prototype.repeat.call("─", sepLen)}${C.reset}`);
-        const detail = await fetchPRDetail(pr.repo, pr.number);
+        const detail = details[i];
         if (!detail) {
           out(`${C.yellow}Could not load details for #${pr.number}${C.reset}`);
           continue;
@@ -2858,7 +2894,9 @@ async function cmdOpen(args: string[]): Promise<void> {
   const key = await requireTicket(args);
   const url = `${Config.jiraBase}/browse/${key}`;
 
-  if (globalFormat === "plain" || globalFormat === "json") {
+  if (globalFormat === "json") {
+    out(JSON.stringify({ key, url }, null, 2));
+  } else if (globalFormat === "plain") {
     out(url);
   } else {
     out(`${C.dim}Opening${C.reset} ${formatProjectKey(key)} ${C.dim}in browser...${C.reset}`);
@@ -3021,17 +3059,19 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     changes.push(`labels → ${labelList.join(", ")}`);
   }
 
+  const labelOps: { add?: string; remove?: string }[] = [];
   if (options.addLabel) {
     const labelToAdd = options.addLabel.trim();
-    update.labels = [{ add: labelToAdd }];
+    labelOps.push({ add: labelToAdd });
     changes.push(`label + ${labelToAdd}`);
   }
 
   if (options.removeLabel) {
     const labelToRemove = options.removeLabel.trim();
-    update.labels = [{ remove: labelToRemove }];
+    labelOps.push({ remove: labelToRemove });
     changes.push(`label - ${labelToRemove}`);
   }
+  if (labelOps.length > 0) update.labels = labelOps;
 
   if (Object.keys(fields).length === 0 && Object.keys(update).length === 0 && !options.status) {
     out(`${C.yellow}No changes specified${C.reset}`);
@@ -3111,13 +3151,23 @@ async function cmdEdit(creds: Credentials, key: string, options: {
 
   if (foundTransition) {
     showLoading(`Transitioning ${key}...`);
-    await jiraPost(creds, `/rest/api/3/issue/${key}/transitions`, {
-      transition: { id: foundTransition.id },
-    });
+    try {
+      await jiraPost(creds, `/rest/api/3/issue/${key}/transitions`, {
+        transition: { id: foundTransition.id },
+      });
+    } catch (err) {
+      clearLoading();
+      const applied = hasFieldChanges ? changes : [];
+      emitError("transition_failed", `Transition of ${key} to ${foundTransition.name} failed${applied.length > 0 ? ` after applying: ${applied.join("; ")}` : ""}: ${err instanceof Error ? err.message : String(err)}`, { key, applied });
+    }
     clearLoading();
     changes.push(`status → ${foundTransition.name}`);
   }
 
+  if (globalFormat === "json") {
+    out(JSON.stringify({ key, changes }, null, 2));
+    return;
+  }
   out(`${C.green}✓${C.reset} Updated ${formatProjectKey(key)}`);
   for (const change of changes) {
     out(`  ${C.dim}${change}${C.reset}`);
@@ -3161,12 +3211,17 @@ async function cmdTransition(creds: Credentials, args: string[]): Promise<void> 
 
   showLoading(`Transitioning ${key}...`);
 
-  await jiraPost(creds, `/rest/api/3/issue/${key}/transitions`, {
-    transition: { id: found.id },
-  });
+  try {
+    await jiraPost(creds, `/rest/api/3/issue/${key}/transitions`, {
+      transition: { id: found.id },
+    });
+  } catch (err) {
+    clearLoading();
+    emitError("transition_failed", `Transition of ${key} to ${found.name} failed: ${err instanceof Error ? err.message : String(err)}`, { key });
+  }
 
   clearLoading();
-  out(`${C.green}✓${C.reset} ${formatProjectKey(key)} → ${found.name}`);
+  outTransitioned(key, found.name, "");
 }
 
 async function printAgentHelp(): Promise<void> {
@@ -3181,14 +3236,14 @@ async function printAgentHelp(): Promise<void> {
 async function runJqlSearch(creds: Credentials, jql: string, args: Record<string, unknown>): Promise<void> {
   const showSpinner = globalFormat === "table" && !args.keys && !args.count;
   if (showSpinner) showLoading("Searching...");
-  const maxResults = typeof args.m === "string" ? parseInt(args.m, 10) || 50 : 50;
-  const result = await jiraSearch(creds, jql, maxResults) as { issues?: unknown[] };
+  const result = await jiraSearch(creds, jql, parseLimit(args, 50)) as { issues?: unknown[] };
   if (showSpinner) clearLoading();
   if (result.issues) await cacheIssues(result.issues);
 
   // Re-rank text searches with local fuzzy search
   if (typeof args.q === "string" || typeof args.summary === "string") {
-    await runLocalSearch(args, creds, false);
+    const keys = (result.issues ?? []).map(issue => (issue as { key: string }).key);
+    await runLocalSearch(args, creds, keys);
     return;
   }
 
@@ -3418,6 +3473,8 @@ const searchCommand = defineCommand({
       typeof args.l === "string" || typeof args.priority === "string" ||
       typeof args.epic === "string" || typeof args.points === "string" ||
       typeof args.updated === "string" || typeof args.r === "string" ||
+      typeof args.created === "string" || typeof args.resolved === "string" ||
+      typeof args.parent === "string" ||
       args["current-sprint"] || typeof args.sprint === "string" ||
       args["my-team"] || args.recent || typeof args.stale === "string" ||
       args.backlog || args["my-created"];
@@ -3769,7 +3826,7 @@ const main = defineCommand({
         repo: { type: "string", description: "Filter by GitHub repo (comma-separated, e.g. 'owner/repo')" },
         project: { type: "string", description: "Filter by Jira project key (comma-separated, e.g. 'PROJ')" },
         org: { type: "string", description: "Filter by GitHub org/owner (e.g. 'my-org')" },
-        state: { type: "string", description: "Filter by PR state: open, merged, closed (default: all)" },
+        state: { type: "string", description: "Filter by PR state: open, merged, closed, all (default: all)" },
         F: { type: "boolean", alias: "fresh", description: "Skip cache and fetch fresh PR data" },
       },
       run: async ({ args }) => {
@@ -3781,8 +3838,11 @@ const main = defineCommand({
         const hasKey = typeof args.key === "string" && args.key.length > 0;
         const hasFilters = !!(args.repo || args.project || args.org || args.state);
 
-        // Shared state filter
-        const stateOpt = typeof args.state === "string" ? args.state.toLowerCase() as "OPEN" | "MERGED" | "CLOSED" | "all" : "all";
+        const stateArg = typeof args.state === "string" ? args.state.toUpperCase() : "ALL";
+        if (!["OPEN", "MERGED", "CLOSED", "ALL"].includes(stateArg)) {
+          emitError("invalid_state", `Invalid --state '${args.state}'. Use open, merged, closed or all.`);
+        }
+        const stateOpt = (stateArg === "ALL" ? "all" : stateArg) as "OPEN" | "MERGED" | "CLOSED" | "all";
 
         // Route to my-PRs list when --mine is set, or when filters are given without a key
         if (isMine || (!hasKey && hasFilters)) {
@@ -4148,25 +4208,12 @@ const main = defineCommand({
           if (resolved.type === "valid" || resolved.type === "resolved") {
             args.query = resolved.key;
             queryIsKey = true;
-            if (resolved.type === "resolved") {
-              out(`${C.dim}Resolved${C.reset} ${resolved.original} ${C.dim}→${C.reset} ${formatProjectKey(resolved.key)}`);
-            }
-          } else if (resolved.type === "multiple") {
-            if (globalFormat === "table") {
-              const selected = await promptSelect(
-                `${C.yellow}Multiple matches for '${resolved.original}':${C.reset}`,
-                resolved.matches.map(match => ({
-                  value: match.key,
-                  label: formatProjectKey(match.key),
-                  description: truncate(match.summary, 60),
-                }))
-              );
-              if (selected) {
-                args.query = selected;
-                queryIsKey = true;
-              }
-            } else {
-              args.q = args.query;
+            if (resolved.type === "resolved") reportResolvedKey(resolved.original, resolved.key);
+          } else if (resolved.type === "multiple" && globalFormat === "table") {
+            const selected = await selectAmbiguousKey(resolved.original, resolved.matches);
+            if (selected) {
+              args.query = selected;
+              queryIsKey = true;
             }
           } else {
             args.q = args.query;
@@ -4206,8 +4253,9 @@ const main = defineCommand({
           // Search
           if (globalFormat === "table") showLoading("Searching...");
           const opts = await buildSearchOpts(args, creds, 20);
-          const hybridOpts: HybridSearchOpts = { ...opts, noSemantic: !!args["no-semantic"] };
-          const cachedIssues = opts.text && !args["no-semantic"]
+          const noSemantic = isDisabled(args, "semantic");
+          const hybridOpts: HybridSearchOpts = { ...opts, noSemantic };
+          const cachedIssues = opts.text && !noSemantic
             ? await searchCacheHybrid(hybridOpts)
             : await searchCache(opts);
           clearLoading();
@@ -4225,7 +4273,7 @@ const main = defineCommand({
         let allIssues: Map<string, IssueData>;
         let allRaws: Map<string, unknown>;
 
-        if (args["no-expand"]) {
+        if (isDisabled(args, "expand")) {
           allIssues = new Map(seedIssues.map(i => [i.key, i]));
           allRaws = seedRaws;
         } else {
@@ -4545,27 +4593,33 @@ const main = defineCommand({
         let linkType: string | null = null;
         let targetKeyInput: string | null = null;
         let inward = false;
+        let verb = "";
 
         if (typeof args.blocks === "string") {
           linkType = "Blocks";
           targetKeyInput = args.blocks;
           inward = false;
+          verb = "blocks";
         } else if (typeof args["is-blocked-by"] === "string") {
           linkType = "Blocks";
           targetKeyInput = args["is-blocked-by"];
           inward = true;
+          verb = "is blocked by";
         } else if (typeof args["relates-to"] === "string") {
           linkType = "Relates";
           targetKeyInput = args["relates-to"];
           inward = false;
+          verb = "relates to";
         } else if (typeof args.duplicates === "string") {
           linkType = "Duplicate";
           targetKeyInput = args.duplicates;
           inward = false;
+          verb = "duplicates";
         } else if (typeof args["is-duplicated-by"] === "string") {
           linkType = "Duplicate";
           targetKeyInput = args["is-duplicated-by"];
           inward = true;
+          verb = "is duplicated by";
         }
 
         if (!linkType || !targetKeyInput) {
@@ -4591,7 +4645,7 @@ const main = defineCommand({
         await jiraPost(creds, "/rest/api/3/issueLink", payload);
 
         clearLoading();
-        out(`${C.green}✓${C.reset} Linked ${formatProjectKey(key)} ${C.dim}${inward ? "is blocked by" : linkType.toLowerCase()}${C.reset} ${formatProjectKey(targetKey)}`);
+        out(`${C.green}✓${C.reset} Linked ${formatProjectKey(key)} ${C.dim}${verb}${C.reset} ${formatProjectKey(targetKey)}`);
       },
     }),
     links: defineCommand({
@@ -4974,81 +5028,25 @@ const main = defineCommand({
           console.error("Error: Summary is required (-s or positional argument)");
           process.exit(1);
         }
-        const summaryText = await readFileArg(summaryArg);
-        const summary = summaryText.trim().split("\n")[0];
-
-        const project = typeof args.p === "string" ? args.p : Config.defaultProject;
-        const issueType = typeof args.t === "string" ? args.t : "Task";
-
-        if (globalFormat === "table") showLoading("Creating ticket...");
-
-        const myself = (await jiraGet(creds, "/rest/api/3/myself")) as { accountId?: string };
-        const accountId = myself.accountId || "";
-
-        const fields: Record<string, unknown> = {
-          project: { key: project },
-          summary,
-          issuetype: { name: issueType },
+        const options: CreateTicketOptions = {
+          summary: summaryArg,
+          project: typeof args.p === "string" ? args.p : undefined,
+          description: typeof args.d === "string" ? args.d : undefined,
+          issueType: typeof args.t === "string" ? args.t : undefined,
+          assignToMe: !!args.a,
+          inProgress: !!args.i,
+          team: !!args.e,
+          sprint: typeof args.sprint === "string" ? args.sprint : !!args["current-sprint"],
+          priority: typeof args.priority === "string" ? args.priority : undefined,
+          points: typeof args.points === "string" ? args.points : undefined,
+          acceptanceCriteria: typeof args.ac === "string" ? args.ac : undefined,
+          testingInstructions: typeof args.ti === "string" ? args.ti : undefined,
         };
 
-        if (typeof args.d === "string") {
-          const description = await readFileArg(args.d);
-          fields.description = markdownToAdf(description);
-        }
-
-        if (args.a && accountId) {
-          fields.assignee = { accountId };
-        }
-
-        if (args.e) {
-          fields[requireCustomField("team")] = Config.myTeamId;
-        }
-
-        if (typeof args.priority === "string") {
-          const priorityId = PriorityMap[args.priority.toLowerCase()];
-          if (priorityId) {
-            fields.priority = { id: priorityId };
-          }
-        }
-
-        if (typeof args.points === "string") {
-          const pts = parseFloat(args.points);
-          if (!isNaN(pts)) {
-            fields[requireCustomField("storyPoints")] = pts;
-          }
-        }
-
-        if (typeof args.ac === "string") {
-          const ac = await readFileArg(args.ac);
-          fields[requireCustomField("acceptanceCriteria")] = markdownToAdf(ac);
-        }
-
-        if (typeof args.ti === "string") {
-          const ti = await readFileArg(args.ti);
-          fields[requireCustomField("testingInstructions")] = markdownToAdf(ti);
-        }
-
-        if (typeof args.sprint === "string") {
-          const sprintId = parseInt(args.sprint, 10);
-          if (!isNaN(sprintId)) {
-            fields[requireCustomField("sprint")] = sprintId;
-          }
-        } else if (args["current-sprint"]) {
-          const sprintResp = (await jiraGet(
-            creds,
-            `/rest/agile/1.0/board/${Config.myBoardId}/sprint?state=active`
-          )) as { values?: { id: number }[] };
-          const activeSprint = sprintResp.values?.[0];
-          if (activeSprint) {
-            fields[requireCustomField("sprint")] = activeSprint.id;
-          }
-        }
-
         if (args["dry-run"]) {
-          if (globalFormat === "table") clearLoading();
-          const payload = { dryRun: true, action: "create", fields };
+          const { fields } = await buildCreateFields(creds, options);
           if (globalFormat === "json") {
-            out(JSON.stringify(payload, null, 2));
+            out(JSON.stringify({ dryRun: true, action: "create", fields }, null, 2));
             return;
           }
           out(`${C.yellow}Dry run — would create:${C.reset}`);
@@ -5056,37 +5054,18 @@ const main = defineCommand({
           return;
         }
 
-        const result = (await jiraPost(creds, "/rest/api/3/issue", { fields })) as {
-          key?: string;
-          errors?: unknown;
-        };
-
-        const newKey = result.key;
-        if (!newKey) {
-          clearLoading();
-          console.error(`${C.red}✗${C.reset} Error creating issue: ${JSON.stringify(result.errors || result)}`);
-          process.exit(1);
-        }
-
-        if (args.i) {
-          await jiraPost(creds, `/rest/api/3/issue/${newKey}/transitions`, {
-            transition: { id: Config.inProgressTransitionId },
-          });
-        }
-
-        const createdIssue = await jiraGet(creds, `/rest/api/3/issue/${newKey}`);
-        await cacheSingleIssue(createdIssue);
-
+        if (globalFormat === "table") showLoading("Creating ticket...");
+        const created = await createTicketRecord(creds, options);
         clearLoading();
 
         out();
-        out(`${C.green}✓${C.reset} Created ${formatProjectKey(newKey)}  ${C.dim}${truncate(summary, 50)}${C.reset}`);
+        out(`${C.green}✓${C.reset} Created ${formatProjectKey(created.key)}  ${C.dim}${truncate(created.summary, 50)}${C.reset}`);
 
         if (args.i) {
           out(`  ${C.dim}→${C.reset} ${C.yellow}In Progress${C.reset}`);
         }
 
-        out(`  ${C.dim}${Config.jiraBase}/browse/${newKey}${C.reset}`);
+        out(`  ${C.dim}${created.url}${C.reset}`);
         out();
       },
     }),
@@ -5321,7 +5300,6 @@ const main = defineCommand({
       meta: { description: "Sync tickets from Jira to local cache" },
       args: {
         f: { type: "boolean", alias: "full", description: "Force full sync (ignore last sync time)" },
-        a: { type: "boolean", alias: "all", description: "Include done/closed tickets" },
         p: { type: "string", description: "Project filter - comma-separated" },
         stats: { type: "boolean", description: "Show cache stats only" },
         users: { type: "boolean", description: "Sync users only (fetch all Jira users)" },
@@ -5330,6 +5308,7 @@ const main = defineCommand({
       },
       run: async ({ args }) => {
         subCommandExecuted = true;
+        applyFormat(args);
         const creds = await getCredentials(args);
 
         if (args.users) {
@@ -5415,7 +5394,6 @@ const main = defineCommand({
             });
           }
 
-          invalidateSearchIndex();
           const doneMsg = `${C.green}✓${C.reset} Backfilled ${ticketsFetched} tickets${changelogKeys.length > 0 ? `, ${changelogKeys.length} changelogs` : ""}`;
           await progress.done(doneMsg);
           return;
@@ -5441,11 +5419,12 @@ const main = defineCommand({
           ? args.p.split(",").map(p => p.trim().toUpperCase())
           : undefined;
 
-        await runSync(creds, {
+        const result = await runSync(creds, {
           projects,
           fullSync: !!args.f,
-          includeDone: args.a !== false,
         });
+        if (globalFormat === "json") out(JSON.stringify(result, null, 2));
+        if (globalFormat === "plain") out(`${result.fetched}\t${result.changed}`);
       },
     }),
     embed: defineCommand({
@@ -5630,7 +5609,7 @@ const main = defineCommand({
             showLoading("Fetching page details...");
             let page: any;
             try {
-              page = await getConfluencePage(creds, pageId);
+              page = await getConfluencePage(creds, pageId, { preserveUnknown: true });
             } finally {
               clearLoading();
             }
@@ -5639,8 +5618,8 @@ const main = defineCommand({
             const tempFilePath = `/tmp/tik-doc-${pageId}.md`;
             await Bun.write(tempFilePath, originalBody);
             
-            const editor = process.env.EDITOR || "nano";
-            const proc = Bun.spawn([editor, tempFilePath], {
+            const editor = (process.env.EDITOR || "nano").trim().split(/\s+/);
+            const proc = Bun.spawn([...editor, tempFilePath], {
               stdin: "inherit",
               stdout: "inherit",
               stderr: "inherit",
@@ -5688,9 +5667,10 @@ const main = defineCommand({
             if (args.online) {
               showLoading("Searching Confluence online...");
               try {
-                let cql = `text ~ "${query}" AND type=page`;
+                const cqlQuote = (value: string) => `"${value.replace(/[\\"]/g, "\\$&")}"`;
+                let cql = `text ~ ${cqlQuote(query)} AND type=page`;
                 if (args.space) {
-                  cql += ` AND space = "${String(args.space)}"`;
+                  cql += ` AND space = ${cqlQuote(String(args.space))}`;
                 }
                 const results = await searchConfluence(creds, cql);
                 if (globalFormat === "json") {

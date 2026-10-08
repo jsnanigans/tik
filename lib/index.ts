@@ -59,6 +59,7 @@ export {
   type PRMergeStatus,
   type PRDetail,
   type PRGateResult,
+  CHECK_FAILURE_CONCLUSIONS,
   fetchPRsForTickets,
   getPRForTicket,
   getPRForBranch,
@@ -92,7 +93,6 @@ export {
   getCachedIssuesRaw,
   findIssuesContaining,
   getTimelineDates,
-  clearCache,
   rebuildFtsIndex,
   isValidKey,
   resolveKey,
@@ -101,10 +101,10 @@ export {
   getCacheStats,
   upsertFlowState,
   type KeyResolveResult,
+  type MatchedKey,
   getLocalMineIssues,
   getLocalSprintData,
   getWasMineKeys,
-  getIdKeyMap,
   getBackfillKeys,
   getRecentCachedKeys,
   cacheChangelog,
@@ -120,7 +120,6 @@ export {
   getUser,
   getMainUser,
   getUsersByRole,
-  upsertUser,
   upsertUsersFromSync,
   updateUserFields,
   findUserByNameOrId,
@@ -131,7 +130,6 @@ export {
   type CachedPR,
   cachePRs,
   getCachedPRs,
-  clearPRCache,
 } from "./cache";
 export { highlightTerms, findExcerpts } from "./fuzzy";
 export { isStopWord, invalidateSearchIndex } from "./search";

@@ -6,26 +6,63 @@ export type AdfNode = {
   attrs?: Record<string, unknown>;
 };
 
-// --- Media (image) round-trip support ---
-//
-// ADF media nodes (mediaSingle/mediaGroup/media/mediaInline) reference Confluence-hosted
-// attachments by opaque id + collection; there's no way to synthesize a valid one from
-// scratch, and no public URL to render. Instead of dropping them, encode the exact original
-// node as a base64 blob inside a markdown image placeholder — visible as a placeholder when
-// read, and losslessly reconstructed on the way back to ADF so editing unrelated text and
-// re-uploading never strips a page's images.
-function encodeMediaPlaceholder(node: AdfNode): string {
-  let alt: string;
-  if (node.type === "mediaGroup") {
-    alt = (node.content ?? []).map((c) => (c.attrs?.alt as string) || "file").join(", ");
-  } else {
-    const media =
-      node.content?.find((c) => c.type === "media") ??
-      (node.type === "media" || node.type === "mediaInline" ? node : undefined);
-    alt = (media?.attrs?.alt as string) || "image";
+// ADF nodes markdown cannot express round-trip as base64 image placeholders (`tikmedia:`/`tikadf:`).
+const MEDIA_TYPES = new Set(["mediaSingle", "mediaGroup", "media", "mediaInline"]);
+const INLINE_TYPES = new Set([
+  "text", "hardBreak", "mention", "emoji", "date", "status", "inlineCard", "mediaInline", "inlineExtension", "placeholder",
+]);
+
+function readableText(node: AdfNode): string {
+  const attrs = node.attrs ?? {};
+  switch (node.type) {
+    case "mention":
+      return "@" + String(attrs.text || "user").replace(/^@/, "");
+    case "status":
+      return String(attrs.text ?? "");
+    case "date": {
+      const date = new Date(Number(attrs.timestamp));
+      return isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+    }
+    case "inlineCard":
+    case "blockCard":
+    case "embedCard":
+      return String(attrs.url ?? "");
+    default:
+      return "";
   }
+}
+
+function placeholderLabel(node: AdfNode): string {
+  const attrs = node.attrs ?? {};
+  switch (node.type) {
+    case "mediaGroup":
+      return "image: " + (node.content ?? []).map((c) => (c.attrs?.alt as string) || "file").join(", ");
+    case "mediaSingle":
+    case "media":
+    case "mediaInline": {
+      const media = node.content?.find((c) => c.type === "media") ?? node;
+      return "image: " + ((media.attrs?.alt as string) || "image");
+    }
+    case "status":
+    case "date":
+      return `${node.type}: ${readableText(node)}`;
+    case "extension":
+    case "bodiedExtension":
+    case "inlineExtension":
+      return `macro: ${attrs.extensionKey}`;
+    case "expand":
+    case "nestedExpand":
+      return `expand: ${attrs.title || ""}`;
+    default:
+      return readableText(node) || node.type;
+  }
+}
+
+function encodePlaceholder(node: AdfNode): string {
+  const label = placeholderLabel(node).replace(/[[\]\n]/g, "");
+  const scheme = MEDIA_TYPES.has(node.type) ? "tikmedia" : "tikadf";
   const encoded = Buffer.from(JSON.stringify(node)).toString("base64");
-  return `![image: ${alt}](tikmedia:${encoded})`;
+  return `![${label}](${scheme}:${encoded})`;
 }
 
 /**
@@ -64,7 +101,7 @@ export function makeMediaPlaceholder(mediaId: string, issueId: string, filename:
       },
     ],
   };
-  return encodeMediaPlaceholder(node);
+  return encodePlaceholder(node);
 }
 
 export function decodeMediaPlaceholder(base64: string): AdfNode | null {
@@ -75,8 +112,8 @@ export function decodeMediaPlaceholder(base64: string): AdfNode | null {
   }
 }
 
-const MEDIA_PLACEHOLDER_RE = /^!\[image:[^\]]*\]\(tikmedia:([A-Za-z0-9+/=]+)\)$/;
-const MEDIA_PLACEHOLDER_INLINE_RE = /^!\[image:[^\]]*\]\(tikmedia:([A-Za-z0-9+/=]+)\)/;
+const PLACEHOLDER_RE = /^!\[[^\]]*\]\((?:tikmedia|tikadf):([A-Za-z0-9+/=]+)\)$/;
+const PLACEHOLDER_INLINE_RE = /^!\[[^\]]*\]\((?:tikmedia|tikadf):([A-Za-z0-9+/=]+)\)/;
 
 function parseInline(text: string): AdfNode[] {
   const nodes: AdfNode[] = [];
@@ -90,13 +127,13 @@ function parseInline(text: string): AdfNode[] {
       continue;
     }
 
-    // Media placeholder: ![image: alt](tikmedia:<base64>)
-    const mediaInlineMatch = remaining.match(MEDIA_PLACEHOLDER_INLINE_RE);
-    if (mediaInlineMatch) {
-      const node = decodeMediaPlaceholder(mediaInlineMatch[1]);
+    // Opaque node placeholder: ![label](tikmedia:<base64>) or ![label](tikadf:<base64>)
+    const placeholderMatch = remaining.match(PLACEHOLDER_INLINE_RE);
+    if (placeholderMatch) {
+      const node = decodeMediaPlaceholder(placeholderMatch[1]);
       if (node) {
         nodes.push(node);
-        remaining = remaining.slice(mediaInlineMatch[0].length);
+        remaining = remaining.slice(placeholderMatch[0].length);
         continue;
       }
     }
@@ -121,10 +158,11 @@ function parseInline(text: string): AdfNode[] {
       continue;
     }
 
-    // Italic: *text* or _text_
-    const italicMatch = remaining.match(/^(\*|_)([^*_]+)\1/);
-    if (italicMatch) {
-      nodes.push({ type: "text", text: italicMatch[2], marks: [{ type: "em" }] });
+    // Italic: *text* or _text_ (underscores only at word boundaries, so snake_case stays literal)
+    const italicMatch = remaining.match(/^\*([^*_]+)\*|^_([^*_]+)_(?!\w)/);
+    const atWordStart = !/\w/.test(text[text.length - remaining.length - 1] ?? "");
+    if (italicMatch && (italicMatch[1] !== undefined || atWordStart)) {
+      nodes.push({ type: "text", text: italicMatch[1] ?? italicMatch[2], marks: [{ type: "em" }] });
       remaining = remaining.slice(italicMatch[0].length);
       continue;
     }
@@ -160,7 +198,54 @@ function parseInline(text: string): AdfNode[] {
     remaining = remaining.slice(1);
   }
 
-  return nodes.length > 0 ? nodes : [{ type: "text", text: "" }];
+  return nodes;
+}
+
+function parseBlocks(text: string): AdfNode[] {
+  const blocks: AdfNode[] = [];
+  let inline: AdfNode[] = [];
+  const flush = () => {
+    if (inline.length > 0) blocks.push({ type: "paragraph", content: inline });
+    inline = [];
+  };
+  for (const node of parseInline(text)) {
+    if (INLINE_TYPES.has(node.type)) {
+      inline.push(node);
+    } else {
+      flush();
+      blocks.push(node);
+    }
+  }
+  flush();
+  return blocks;
+}
+
+function parseBlocksOrEmpty(text: string): AdfNode[] {
+  const blocks = parseBlocks(text);
+  return blocks.length > 0 ? blocks : [{ type: "paragraph", content: [] }];
+}
+
+const LIST_ITEM_RE = /^(\s*)([-*]|\d+\.)\s+(.*)$/;
+
+function parseList(lines: string[], start: number): { node: AdfNode; nextIndex: number } {
+  const [, indent, marker] = lines[start].match(LIST_ITEM_RE)!;
+  const ordered = /\d/.test(marker);
+  const items: AdfNode[] = [];
+  let i = start;
+  while (i < lines.length) {
+    const match = lines[i].match(LIST_ITEM_RE);
+    if (!match || match[1].length < indent.length) break;
+    if (match[1].length > indent.length) {
+      const nested = parseList(lines, i);
+      items[items.length - 1].content!.push(nested.node);
+      i = nested.nextIndex;
+      continue;
+    }
+    if (/\d/.test(match[2]) !== ordered) break;
+    items.push({ type: "listItem", content: parseBlocksOrEmpty(match[3]) });
+    i++;
+  }
+  return { node: { type: ordered ? "orderedList" : "bulletList", content: items }, nextIndex: i };
 }
 
 // True when a line starts a block type handled elsewhere in markdownToAdf (or is
@@ -170,7 +255,7 @@ function isParagraphBreak(line: string): boolean {
     line.trim() === "" ||
     line.startsWith("```") ||
     /^(#{1,6})\s+(.+)$/.test(line) ||
-    MEDIA_PLACEHOLDER_RE.test(line.trim()) ||
+    PLACEHOLDER_RE.test(line.trim()) ||
     line.startsWith("> ") ||
     (line.includes("|") && line.trim().startsWith("|")) ||
     /^[-*]\s+\[([ x])\]\s/.test(line) ||
@@ -213,10 +298,11 @@ export function markdownToAdf(markdown: string): AdfNode {
         codeLines.push(lines[i]);
         i++;
       }
+      const code = codeLines.join("\n");
       content.push({
         type: "codeBlock",
         attrs: lang ? { language: lang } : {},
-        content: [{ type: "text", text: codeLines.join("\n") }],
+        content: code ? [{ type: "text", text: code }] : [],
       });
       i++;
       continue;
@@ -234,28 +320,21 @@ export function markdownToAdf(markdown: string): AdfNode {
       continue;
     }
 
-    // Media placeholder (image), on its own line: ![image: alt](tikmedia:<base64>)
-    const mediaBlockMatch = line.trim().match(MEDIA_PLACEHOLDER_RE);
-    if (mediaBlockMatch) {
-      const node = decodeMediaPlaceholder(mediaBlockMatch[1]);
-      if (node) {
-        content.push(node);
-        i++;
-        continue;
-      }
+    // Opaque node placeholder on its own line
+    if (PLACEHOLDER_RE.test(line.trim())) {
+      content.push(...parseBlocks(line.trim()));
+      i++;
+      continue;
     }
 
     // Blockquote
     if (line.startsWith("> ")) {
       const quoteLines: string[] = [];
       while (i < lines.length && lines[i].startsWith("> ")) {
-        quoteLines.push(lines[i].slice(2));
+        quoteLines.push(lines[i].slice(2).replace(/[ \t]+$/, ""));
         i++;
       }
-      content.push({
-        type: "blockquote",
-        content: [{ type: "paragraph", content: parseInline(quoteLines.join("\n")) }],
-      });
+      content.push({ type: "blockquote", content: parseBlocksOrEmpty(quoteLines.join("\n")) });
       continue;
     }
 
@@ -277,7 +356,7 @@ export function markdownToAdf(markdown: string): AdfNode {
           type: "tableRow",
           content: cells.map(cell => ({
             type: cellType,
-            content: [{ type: "paragraph", content: parseInline(cell) }],
+            content: parseBlocksOrEmpty(cell),
           })),
         });
         i++;
@@ -309,33 +388,11 @@ export function markdownToAdf(markdown: string): AdfNode {
       continue;
     }
 
-    // Unordered list
-    if (/^[-*]\s+/.test(line)) {
-      const listItems: AdfNode[] = [];
-      while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
-        const itemText = lines[i].replace(/^[-*]\s+/, "");
-        listItems.push({
-          type: "listItem",
-          content: [{ type: "paragraph", content: parseInline(itemText) }],
-        });
-        i++;
-      }
-      content.push({ type: "bulletList", content: listItems });
-      continue;
-    }
-
-    // Ordered list
-    if (/^\d+\.\s+/.test(line)) {
-      const listItems: AdfNode[] = [];
-      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
-        const itemText = lines[i].replace(/^\d+\.\s+/, "");
-        listItems.push({
-          type: "listItem",
-          content: [{ type: "paragraph", content: parseInline(itemText) }],
-        });
-        i++;
-      }
-      content.push({ type: "orderedList", content: listItems });
+    // Bullet or ordered list
+    if (/^([-*]|\d+\.)\s+/.test(line)) {
+      const { node, nextIndex } = parseList(lines, i);
+      content.push(node);
+      i = nextIndex;
       continue;
     }
 
@@ -347,14 +404,15 @@ export function markdownToAdf(markdown: string): AdfNode {
 
     // Regular paragraph — join consecutive soft-wrapped lines into one block
     const { text, nextIndex } = collectParagraphText(lines, i);
-    content.push({ type: "paragraph", content: parseInline(text) });
+    content.push(...parseBlocks(text));
     i = nextIndex;
   }
 
   return { type: "doc", version: 1, content } as AdfNode;
 }
 
-export function adfToMarkdown(adf: AdfNode | null | undefined): string {
+/** `preserveUnknown` encodes nodes markdown cannot express as `tikadf:` placeholders, for edit round trips. */
+export function adfToMarkdown(adf: AdfNode | null | undefined, options: { preserveUnknown?: boolean } = {}): string {
   if (!adf) return "";
 
   const lines: string[] = [];
@@ -377,7 +435,7 @@ export function adfToMarkdown(adf: AdfNode | null | undefined): string {
       case "paragraph":
         if (node.content) {
           const text = node.content.map(extractText).join("");
-          if (text.trim()) lines.push(indent + text);
+          if (text.trim()) lines.push(...text.split("\n").map((line) => indent + line));
         }
         lines.push("");
         break;
@@ -396,9 +454,9 @@ export function adfToMarkdown(adf: AdfNode | null | undefined): string {
       case "bulletList":
         if (node.content) {
           for (const item of node.content) {
-            processNode(item, indent);
+            processListItem(item, indent, "- ");
           }
-          endBlock();
+          if (!indent) endBlock();
         }
         break;
 
@@ -409,20 +467,7 @@ export function adfToMarkdown(adf: AdfNode | null | undefined): string {
             processListItem(item, indent, `${num}. `);
             num++;
           }
-          endBlock();
-        }
-        break;
-
-      case "listItem":
-        if (node.content) {
-          const firstPara = node.content[0];
-          if (firstPara?.content) {
-            const text = firstPara.content.map(extractText).join("");
-            lines.push(indent + "- " + text);
-          }
-          for (const child of node.content.slice(1)) {
-            processNode(child, indent + "  ");
-          }
+          if (!indent) endBlock();
         }
         break;
 
@@ -443,18 +488,15 @@ export function adfToMarkdown(adf: AdfNode | null | undefined): string {
         }
         break;
 
-      case "codeBlock":
-        if (node.content) {
-          const lang = (node.attrs?.language as string) || "";
-          lines.push(indent + "```" + lang);
-          const text = node.content.map(extractText).join("");
-          for (const line of text.split("\n")) {
-            lines.push(indent + line);
-          }
-          lines.push(indent + "```");
-          lines.push("");
-        }
+      case "codeBlock": {
+        const lang = (node.attrs?.language as string) || "";
+        const text = (node.content ?? []).map(extractText).join("");
+        lines.push(indent + "```" + lang);
+        if (text) lines.push(...text.split("\n").map((line) => indent + line));
+        lines.push(indent + "```");
+        lines.push("");
         break;
+      }
 
       case "blockquote":
         if (node.content) {
@@ -473,14 +515,7 @@ export function adfToMarkdown(adf: AdfNode | null | undefined): string {
           let isFirstRow = true;
           for (const row of node.content) {
             if (row.type === "tableRow" && row.content) {
-              const cells = row.content.map((cell) => {
-                if (cell.content) {
-                  return cell.content
-                    .map((p) => (p.content ? p.content.map(extractText).join("") : ""))
-                    .join(" ");
-                }
-                return "";
-              });
+              const cells = row.content.map((cell) => (cell.content ?? []).map(extractText).join(" "));
               lines.push(indent + "| " + cells.join(" | ") + " |");
               if (isFirstRow) {
                 lines.push(indent + "| " + cells.map(() => "---").join(" | ") + " |");
@@ -492,40 +527,28 @@ export function adfToMarkdown(adf: AdfNode | null | undefined): string {
         }
         break;
 
-      case "mediaSingle":
-      case "mediaGroup":
-      case "media":
-        lines.push(indent + encodeMediaPlaceholder(node));
-        lines.push("");
-        break;
-
-      case "hardBreak":
-        break;
-
       case "rule":
         lines.push(indent + "---");
         lines.push("");
         break;
 
       default:
-        if (node.content) {
-          for (const child of node.content) {
-            processNode(child, indent);
-          }
+        if (options.preserveUnknown || MEDIA_TYPES.has(node.type)) {
+          lines.push(indent + encodePlaceholder(node));
+        } else if (node.content) {
+          for (const child of node.content) processNode(child, indent);
+        } else if (readableText(node)) {
+          lines.push(indent + readableText(node));
         }
+        lines.push("");
     }
   }
 
   function processListItem(node: AdfNode, indent: string, prefix: string): void {
-    if (node.content) {
-      const firstPara = node.content[0];
-      if (firstPara?.content) {
-        const text = firstPara.content.map(extractText).join("");
-        lines.push(indent + prefix + text);
-      }
-      for (const child of node.content.slice(1)) {
-        processNode(child, indent + "   ");
-      }
+    const [first, ...rest] = node.content ?? [];
+    lines.push(indent + prefix + (first ? extractText(first) : ""));
+    for (const child of rest) {
+      processNode(child, indent + " ".repeat(prefix.length));
     }
   }
 
@@ -546,24 +569,18 @@ export function adfToMarkdown(adf: AdfNode | null | undefined): string {
       return text;
     }
     if (node.type === "hardBreak") {
-      return "\n";
-    }
-    if (node.type === "mention") {
-      return "@" + ((node.attrs?.text as string) || "user");
+      return "  \n";
     }
     if (node.type === "emoji") {
       return (node.attrs?.shortName as string) || "";
     }
-    if (node.type === "inlineCard" || node.type === "link") {
-      return (node.attrs?.url as string) || "";
+    if (node.type === "paragraph" || node.type === "heading") {
+      return (node.content ?? []).map(extractText).join("");
     }
-    if (node.type === "mediaInline" || node.type === "media") {
-      return encodeMediaPlaceholder(node);
+    if (options.preserveUnknown || MEDIA_TYPES.has(node.type)) {
+      return encodePlaceholder(node);
     }
-    if (node.content) {
-      return node.content.map(extractText).join("");
-    }
-    return "";
+    return node.content ? node.content.map(extractText).join("") : readableText(node);
   }
 
   processNode(adf);
@@ -600,43 +617,38 @@ function convertWikiInline(text: string): string {
   text = text.replace(/(?<=^|[\s(])\+(\S(?:[^+]*?\S)?)\+(?=[\s).,;:!?]|$)/g, "**$1**");
   // 11. ^super^ / ~sub~ → strip markers
   text = text.replace(/\^([^^]+)\^/g, "$1");
-  text = text.replace(/~([^~]+)~/g, "$1");
+  text = text.replace(/(?<!~)~([^~]+)~(?!~)/g, "$1");
   // 12. \\ → newline
   text = text.replace(/\\\\/g, "\n");
   return text;
 }
 
-type WikiBlockState = "normal" | "code" | "noformat" | "panel" | "quote";
+type WikiBlockState = "normal" | "code" | "panel" | "quote";
 
 export function jiraWikiToMarkdown(wiki: string): string {
   if (!wiki) return "";
   const inputLines = wiki.split("\n");
   const output: string[] = [];
   let state: WikiBlockState = "normal";
-  let codeLang = "";
+  let codeEndTag = "";
+
+  function pushCode(text: string): void {
+    const end = text.indexOf(codeEndTag);
+    if (end === -1) {
+      output.push(text);
+      return;
+    }
+    if (end > 0) output.push(text.slice(0, end));
+    output.push("```");
+    state = "normal";
+  }
 
   for (const rawLine of inputLines) {
     const line = rawLine;
 
-    // --- State: inside {code}
+    // --- State: inside {code} or {noformat}
     if (state === "code") {
-      if (/^\{code\}/.test(line)) {
-        output.push("```");
-        state = "normal";
-      } else {
-        output.push(line);
-      }
-      continue;
-    }
-
-    // --- State: inside {noformat}
-    if (state === "noformat") {
-      if (/^\{noformat\}/.test(line)) {
-        output.push("```");
-        state = "normal";
-      } else {
-        output.push(line);
-      }
+      pushCode(line);
       continue;
     }
 
@@ -662,19 +674,14 @@ export function jiraWikiToMarkdown(wiki: string): string {
 
     // --- Normal state: detect block openers ---
 
-    // {code:lang} or {code}
-    const codeMatch = line.match(/^\{code(?::([^}]*))?\}/);
+    // {code:lang}, {code} or {noformat}, possibly closed on the same line
+    const codeMatch = line.match(/^\{(code|noformat)(?::([^}]*))?\}(.*)$/);
     if (codeMatch) {
-      codeLang = codeMatch[1] || "";
-      output.push("```" + codeLang);
+      const [, tag, lang, rest] = codeMatch;
+      codeEndTag = `{${tag}}`;
+      output.push("```" + (tag === "code" && lang ? lang : ""));
       state = "code";
-      continue;
-    }
-
-    // {noformat}
-    if (/^\{noformat\}/.test(line)) {
-      output.push("```");
-      state = "noformat";
+      if (rest) pushCode(rest);
       continue;
     }
 

@@ -2,15 +2,34 @@ import { type Credentials, makeAuthHeader } from "./credentials";
 import { customFields, localConfig } from "./config";
 
 const JIRA_BASE = localConfig.jiraBase;
+const MAX_RETRIES = 3;
+const BULK_FETCH_LIMIT = 100;
+const IDEMPOTENT_METHODS = new Set(["GET", "PUT", "DELETE"]);
+
+async function jiraFetch(endpoint: string, init: RequestInit, attempt = 0): Promise<Response> {
+  const res = await fetch(`${JIRA_BASE}${endpoint}`, init);
+  const retryable = res.status === 429 || (res.status === 503 && IDEMPOTENT_METHODS.has(init.method ?? "GET"));
+  if (retryable && attempt < MAX_RETRIES) {
+    const seconds = Number(res.headers.get("retry-after")) || 2 ** attempt;
+    await Bun.sleep(seconds * 1000);
+    return jiraFetch(endpoint, init, attempt + 1);
+  }
+  return res;
+}
 
 export async function jiraGet(creds: Credentials, endpoint: string): Promise<unknown> {
-  const res = await fetch(`${JIRA_BASE}${endpoint}`, {
+  const res = await jiraFetch(endpoint, {
     headers: {
       Authorization: makeAuthHeader(creds),
       "Content-Type": "application/json",
     },
   });
-  return res.json();
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`GET ${endpoint} failed (HTTP ${res.status}): ${text.slice(0, 500)}`);
+  }
+  if (!text) return {};
+  return JSON.parse(text);
 }
 
 /**
@@ -39,7 +58,7 @@ export async function jiraPost(
   endpoint: string,
   payload: unknown
 ): Promise<unknown> {
-  const res = await fetch(`${JIRA_BASE}${endpoint}`, {
+  const res = await jiraFetch(endpoint, {
     method: "POST",
     headers: {
       Authorization: makeAuthHeader(creds),
@@ -62,7 +81,7 @@ export async function jiraPut(
   endpoint: string,
   payload: unknown
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`${JIRA_BASE}${endpoint}`, {
+  const res = await jiraFetch(endpoint, {
     method: "PUT",
     headers: {
       Authorization: makeAuthHeader(creds),
@@ -87,7 +106,7 @@ export async function jiraDelete(
   creds: Credentials,
   endpoint: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`${JIRA_BASE}${endpoint}`, {
+  const res = await jiraFetch(endpoint, {
     method: "DELETE",
     headers: {
       Authorization: makeAuthHeader(creds),
@@ -112,7 +131,7 @@ export async function jiraUpload(
 ): Promise<{ ok: boolean; error?: string; data?: unknown }> {
   const form = new FormData();
   form.append("file", data, filename);
-  const res = await fetch(`${JIRA_BASE}${endpoint}`, {
+  const res = await jiraFetch(endpoint, {
     method: "POST",
     headers: {
       Authorization: makeAuthHeader(creds),
@@ -136,31 +155,38 @@ export async function jiraUpload(
   }
 }
 
-export async function jiraBulkFetch(creds: Credentials, ids: string[]): Promise<unknown> {
-  return jiraPost(creds, "/rest/api/3/issue/bulkfetch", {
-    issueIdsOrKeys: ids,
-    fields: [
-      "key",
-      "summary",
-      "status",
-      "assignee",
-      "priority",
-      "issuetype",
-      "created",
-      "updated",
-      "creator",
-      "reporter",
-      "resolution",
-      "resolutiondate",
-      "duedate",
-      ...Object.values(customFields).filter(Boolean),
-      "parent",
-      "description",
-      "labels",
-      "issuelinks",
-      "attachment",
-    ],
-  });
+const BULK_FETCH_FIELDS = [
+  "key",
+  "summary",
+  "status",
+  "assignee",
+  "priority",
+  "issuetype",
+  "created",
+  "updated",
+  "creator",
+  "reporter",
+  "resolution",
+  "resolutiondate",
+  "duedate",
+  ...Object.values(customFields).filter(Boolean),
+  "parent",
+  "description",
+  "labels",
+  "issuelinks",
+  "attachment",
+];
+
+export async function jiraBulkFetch(creds: Credentials, ids: string[]): Promise<{ issues: unknown[] }> {
+  const issues: unknown[] = [];
+  for (let i = 0; i < ids.length; i += BULK_FETCH_LIMIT) {
+    const batch = (await jiraPost(creds, "/rest/api/3/issue/bulkfetch", {
+      issueIdsOrKeys: ids.slice(i, i + BULK_FETCH_LIMIT),
+      fields: BULK_FETCH_FIELDS,
+    })) as { issues?: unknown[] };
+    issues.push(...(batch.issues ?? []));
+  }
+  return { issues };
 }
 
 export type BulkChangelogItem = {
@@ -269,12 +295,7 @@ export async function jiraSearchPaginated(
     issues?: { id: string }[];
     total?: number;
     nextPageToken?: string;
-    errorMessages?: string[];
   };
-
-  if (searchResult.errorMessages) {
-    throw new Error(`Jira API error: ${searchResult.errorMessages.join(", ")}`);
-  }
 
   const issues = searchResult.issues || [];
   const total = searchResult.total || 0;
@@ -284,10 +305,10 @@ export async function jiraSearchPaginated(
   }
 
   const ids = issues.map((i) => i.id);
-  const bulkResult = (await jiraBulkFetch(creds, ids)) as { issues?: unknown[] };
+  const bulkResult = await jiraBulkFetch(creds, ids);
 
   return {
-    issues: bulkResult.issues || [],
+    issues: bulkResult.issues,
     total,
     nextPageToken: searchResult.nextPageToken || null,
   };

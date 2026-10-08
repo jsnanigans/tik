@@ -29,7 +29,7 @@
 | `tik standup` | Last `--hours` (default 30) of Jira and GitHub activity matched to tickets |
 | `tik sprints` | Board sprints (`--state`, default `active,future`) |
 | `tik timeline [QUERY]` | Gantt lanes from changelog for a key or search text. `--no-expand` skips related tickets |
-| `tik pr [KEY]` | PR state, reviews, CI, merge readiness (`--ci`, `--reviews`, `--merge`, `-a`, `--mine`, `--repo`, `--project`, `--org`, `--state`) |
+| `tik pr [KEY]` | PR state, reviews, CI, merge readiness (`--ci`, `--reviews`, `--merge`, `-a`, `--mine`, `--repo`, `--project`, `--org`, `--state` open, merged, closed or all) |
 | `tik open [KEY]`, `tik branch` | Open in browser; show the branch's ticket |
 | `tik whoami`, `tik users` | Identity; user directory |
 
@@ -51,7 +51,7 @@ Text search is not JQL: JQL passed as the query returns nothing. Use `--jql` or 
 
 Filters: `-p` project, `-t` type, `-s` status, `-a` assignee (`me`, `none`, a name), `-l` labels (all comma-separated), `--priority` (1-5 or name), `--epic KEY`, `--points N|>N|1-5|none|any`, `--updated=-7d` (use `=` before a leading `-`).
 
-Known gap: the cache search ignores `-r`, `--created`, `--resolved`, `--current-sprint`, `--sprint`, `--parent`, `--my-team`, `--recent`, `--stale`, `--backlog` and `--my-created`. They are accepted but do not narrow results; use `--jql` for those (`sprint in openSprints()`, `created >= -7d`, `reporter = currentUser()`). `tik timeline` shares this limitation.
+More filters: `-r` reporter (`me` or a name), `--my-created`, `--created` and `--resolved` (same formats as `--updated`), `--stale N` (not updated in N days), `--parent KEY`, `--my-team`, `--current-sprint` (your board's active sprint), `--sprint ID|none`, `--backlog` (no sprint, not done), `--recent`. Invalid values abort the command. `tik timeline` accepts `--current-sprint` and `--sprint` too.
 
 Output: `--sort updated|created|resolved|priority|status|key` with `--asc`, `-m N` (default 50; `--count` is capped by it), `--keys`, `--count`, `--compact`, `-e` expand done.
 
@@ -76,7 +76,7 @@ tik attach add|rm|embed ...
 
 `create` flags: `-p` project (default from config), `-t` type (default Task), `-d`, `-a` assign to me, `-e` your team, `--current-sprint`, `--sprint ID`, `--priority`, `--points`, `--ac`, `--ti`, `-i` move to In Progress.
 
-`edit` flags: `-s`, `-d`, `-a me|none|ACCOUNT_ID`, `-p`/`--priority` (1-5 or name), `-e`, `--current-sprint`, `--sprint ID|none`, `--points`, `--ac`, `--ti`, `--labels a,b`, `--add-label` or `--remove-label` (one per call; the second overwrites the first), `--parent KEY|none`, `--status NAME|ID`. Invalid priority, sprint or points values abort the command.
+`edit` flags: `-s`, `-d`, `-a me|none|ACCOUNT_ID`, `-p`/`--priority` (1-5 or name), `-e`, `--current-sprint`, `--sprint ID|none`, `--points`, `--ac`, `--ti`, `--labels a,b`, `--add-label`, `--remove-label`, `--parent KEY|none`, `--status NAME|ID`. Invalid priority, sprint or points values abort the command.
 
 Priority: 1 Highest, 2 High, 3 Medium, 4 Low, 5 Lowest.
 
@@ -98,7 +98,7 @@ PRs are matched to tickets by the key in the branch name. Repos come from `githu
 
 | Command | Purpose |
 |---|---|
-| `tik sync` | Incremental sync of open tickets (`-f` full, `-a` include done, `-p PROJ,PROJ`, `-c` changelogs only, `--users`, `--backfill`, `--stats`) |
+| `tik sync` | Incremental sync of tickets (`-f` full, `-p PROJ,PROJ`, `-c` changelogs only, `--users`, `--backfill`, `--stats`) |
 | `tik embed [sync\|check]` | Embedding stats, generate pending embeddings, check Ollama |
 | `tik triage [-a]` | Interactive bulk fill of type, sprint, points, team |
 | `tik users` | List and edit the user directory |

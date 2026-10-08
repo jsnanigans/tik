@@ -73,14 +73,18 @@ export async function resolveSpaceKey(creds: Credentials, spaceId: string): Prom
 }
 
 // Get a page by ID, including its ADF body
-export async function getConfluencePage(creds: Credentials, pageId: string): Promise<ConfluencePage> {
+export async function getConfluencePage(
+  creds: Credentials,
+  pageId: string,
+  options: { preserveUnknown?: boolean } = {}
+): Promise<ConfluencePage> {
   const data = await confluenceRequest(creds, "GET", `/api/v2/pages/${pageId}?body-format=atlas_doc_format`);
   const adfString = data.body?.atlas_doc_format?.value;
   let bodyMarkdown = "";
   if (adfString) {
     try {
       const adfJson = JSON.parse(adfString);
-      bodyMarkdown = adfToMarkdown(adfJson);
+      bodyMarkdown = adfToMarkdown(adfJson, options);
     } catch (err) {
       console.warn(`Warning: failed to parse ADF body for page ${pageId}:`, err);
     }
@@ -164,7 +168,7 @@ export async function updateConfluencePage(
     spaceId: data.spaceId,
     spaceKey: null,
     title: data.title,
-    body: params.markdown,
+    body: adfToMarkdown(adfJson),
     version: data.version?.number || 1,
     parentId: data.parentId || null,
     updated: data.version?.createdAt || data.createdAt || null,

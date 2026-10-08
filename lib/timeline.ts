@@ -1,8 +1,9 @@
 import { type Credentials } from "./credentials";
-import { jiraGet, jiraBulkChangelog, type BulkChangelogHistory } from "./api";
+import { jiraBulkChangelog, type BulkChangelogHistory } from "./api";
 import { type IssueData, type IssueLinkData, parseIssue, parseIssueLinks } from "./parser";
 import { getCachedIssuesRaw, getChildrenRaw, getTimelineDates, cacheTimelineDates, getKeysNeedingChangelogSync, cachePreviousAssignees, markChangelogSynced, cacheChangelog } from "./cache";
 import { StatusCategory } from "../ui/format";
+import { fetchFullChangelog, type ChangelogEntry } from "./history";
 import { localConfig } from "./config";
 
 export type TimelineDate = {
@@ -53,40 +54,6 @@ const DONE_STATUSES = new Set(StatusCategory.done.statuses);
 const TESTING_STATUSES = new Set(localConfig.statuses.timeline.testing);
 const COMPLETED_STATUSES = new Set(localConfig.statuses.timeline.completed);
 
-type ChangelogEntry = {
-  created: string;
-  items: Array<{ field: string; fromString: string; toString: string; from: string | null; to: string | null }>;
-  author?: { accountId?: string; displayName?: string; emailAddress?: string };
-};
-
-type ChangelogPage = {
-  values?: ChangelogEntry[];
-  startAt?: number;
-  maxResults?: number;
-  total?: number;
-  isLast?: boolean;
-};
-
-async function fetchChangelog(creds: Credentials, key: string): Promise<ChangelogEntry[]> {
-  const entries: ChangelogEntry[] = [];
-  let startAt = 0;
-
-  while (true) {
-    const page = (await jiraGet(
-      creds,
-      `/rest/api/3/issue/${key}/changelog?startAt=${startAt}&maxResults=100`
-    )) as ChangelogPage;
-
-    const values = page.values || [];
-    entries.push(...values);
-
-    if (page.isLast !== false || values.length === 0) break;
-    startAt += values.length;
-  }
-
-  return entries;
-}
-
 function bulkHistoryToEntries(histories: BulkChangelogHistory[]): ChangelogEntry[] {
   return histories.map(h => ({
     created: new Date(h.created).toISOString(),
@@ -108,13 +75,14 @@ function extractDates(entries: ChangelogEntry[], issue: IssueData): TimelineDate
 
   for (const entry of entries) {
     for (const item of entry.items) {
-      if (item.field !== "status") continue;
-      const date = entry.created.slice(0, 10);
+      if (item.field !== "status" || !item.toString) continue;
+      const status = item.toString;
+      const date = localDay(new Date(entry.created));
 
-      if (!startedAt && STARTED_STATUSES.has(item.toString)) startedAt = date;
-      if (!testingAt && TESTING_STATUSES.has(item.toString)) testingAt = date;
-      if (!completedAt && COMPLETED_STATUSES.has(item.toString)) completedAt = date;
-      if (DONE_STATUSES.has(item.toString)) doneAt = date;
+      if (!startedAt && STARTED_STATUSES.has(status)) startedAt = date;
+      if (!testingAt && TESTING_STATUSES.has(status)) testingAt = date;
+      if (!completedAt && COMPLETED_STATUSES.has(status)) completedAt = date;
+      if (DONE_STATUSES.has(status)) doneAt = date;
     }
   }
 
@@ -148,10 +116,8 @@ function needsChangelogFetch(
 ): boolean {
   // Ticket in to-do / new status — no dates to extract
   if (statusCategory === "To Do" || statusCategory === "New") return false;
-  // Done ticket: only fully resolved if phase dates are also populated
   if (startedAt && doneAt) {
-    if (testingAt || completedAt) return false;
-    return true;
+    return !testingAt && !completedAt && statusCategory !== "Done";
   }
   // In-progress ticket: re-fetch if current status implies a phase date we don't have
   if (startedAt && !doneAt && statusCategory !== "Done") {
@@ -198,7 +164,7 @@ export async function fetchTimelineDates(
       const batch = staleKeys.slice(i, i + BATCH_SIZE);
       const promises = batch.map(async (key) => {
         try {
-          const entries = await fetchChangelog(creds, key);
+          const entries = await fetchFullChangelog(creds, key);
           return { key, entries };
         } catch {
           return { key, entries: [] as ChangelogEntry[] };
@@ -358,7 +324,7 @@ export async function syncTimelineDates(
       const batch = staleKeys.slice(i, i + BATCH_SIZE);
       const promises = batch.map(async (key) => {
         try {
-          const entries = await fetchChangelog(creds, key);
+          const entries = await fetchFullChangelog(creds, key);
           return { key, entries };
         } catch {
           return { key, entries: [] as ChangelogEntry[] };
@@ -559,9 +525,12 @@ function formatDuration(startDate: string, endDate: string): string {
   return `${Math.round(days / 30)}mo`;
 }
 
-function formatMonthDay(dateStr: string): string {
-  const d = new Date(dateStr);
-  return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+function localDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+export function formatMonthDay(dateStr: string): string {
+  return `${dateStr.slice(5, 7)}/${dateStr.slice(8, 10)}`;
 }
 
 export function buildTimeline(
@@ -616,7 +585,7 @@ export function buildTimeline(
     }
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDay(new Date());
 
   // Sort: containers first, then by duration descending (longest left)
   const isContainer = (key: string) => containerChildren.has(key);

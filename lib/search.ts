@@ -81,6 +81,7 @@ export function buildSearchIndex(): MiniSearch {
   }
 
   const db = new Database(dbPath, { readonly: true });
+  db.exec("PRAGMA busy_timeout = 5000");
   const rows = db.query(
     "SELECT key, summary, description, acceptance_criteria, testing_instructions FROM issues"
   ).all() as Array<{
