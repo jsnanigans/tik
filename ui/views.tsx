@@ -15,6 +15,8 @@ import {
   formatPoints,
   formatPRStatus,
   formatEpicParent,
+  formatTeam,
+  groupIssuesByTeam,
   fitAnsi,
 } from "./format";
 
@@ -33,11 +35,14 @@ function LineBlock({ lines }: LineBlockProps): JSX.Element {
 }
 
 
+const TeamWidth = 8;
+
 type IssueRow = {
   typeIcon: string;
   key: string;
   hier: string;
   summary: string;
+  team: string;
   assignee: string;
   updated: string;
   points: string;
@@ -55,18 +60,20 @@ function buildIssueRow(
     showStatus?: boolean;
     rowIndex?: number;
     showPR?: boolean;
+    showTeam?: boolean;
   }
 ): IssueRow {
   const keyWidth = 12;
   const typeWidth = 2;
   const hierWidth = 10;
+  const teamWidth = options.showTeam ? TeamWidth + 1 : 0;
   const assigneeWidth = 10;
   const dateWidth = 4;
   const pointsWidth = 2;
   const prioWidth = 2;
   const prWidth = options.showPR ? 5 : 0;
   const statusWidth = options.showStatus ? 14 : 0;
-  const rightColWidth = assigneeWidth + dateWidth + pointsWidth + prioWidth + prWidth + statusWidth + 4;
+  const rightColWidth = teamWidth + assigneeWidth + dateWidth + pointsWidth + prioWidth + prWidth + statusWidth + 4;
   const summaryWidth = Math.max(10, width - keyWidth - typeWidth - hierWidth - rightColWidth - 5);
 
   const typeIcon = formatTypeIcon(issue.issueType);
@@ -106,6 +113,7 @@ function buildIssueRow(
     key,
     hier,
     summary,
+    team: formatTeam(issue, TeamWidth),
     assignee: assigneeDisplay,
     updated,
     points,
@@ -115,17 +123,18 @@ function buildIssueRow(
   };
 }
 
-function issueColumns(width: number, showPR: boolean, showStatus: boolean): TableColumn<IssueRow>[] {
+function issueColumns(width: number, showPR: boolean, showStatus: boolean, showTeam: boolean): TableColumn<IssueRow>[] {
   const keyWidth = 12;
   const typeWidth = 2;
   const hierWidth = 10;
+  const teamWidth = showTeam ? TeamWidth + 1 : 0;
   const assigneeWidth = 10;
   const dateWidth = 4;
   const pointsWidth = 2;
   const prioWidth = 2;
   const prWidth = showPR ? 5 : 0;
   const statusWidth = showStatus ? 14 : 0;
-  const rightColWidth = assigneeWidth + dateWidth + pointsWidth + prioWidth + prWidth + statusWidth + 4;
+  const rightColWidth = teamWidth + assigneeWidth + dateWidth + pointsWidth + prioWidth + prWidth + statusWidth + 4;
   const summaryWidth = Math.max(10, width - keyWidth - typeWidth - hierWidth - rightColWidth - 5);
 
   const cols: TableColumn<IssueRow>[] = [
@@ -133,6 +142,7 @@ function issueColumns(width: number, showPR: boolean, showStatus: boolean): Tabl
     { key: "key", width: keyWidth, render: row => row.key },
     { key: "hier", width: hierWidth, render: row => row.hier },
     { key: "summary", width: summaryWidth, render: row => row.summary },
+    ...(showTeam ? [{ key: "team", width: TeamWidth, render: (row: IssueRow) => row.team }] : []),
     { key: "assignee", width: assigneeWidth, align: "right", render: row => row.assignee },
     { key: "updated", width: dateWidth, align: "right", render: row => row.updated },
     { key: "points", width: pointsWidth, align: "right", render: row => row.points },
@@ -164,7 +174,7 @@ function SectionHeader({ label, count, color }: SectionHeaderProps): JSX.Element
   );
 }
 
-type IssueListViewProps = {
+type IssueListBodyProps = {
   title?: string;
   issues: IssueData[];
   grouped?: boolean;
@@ -173,9 +183,31 @@ type IssueListViewProps = {
   currentUserId?: string;
   showPR?: boolean;
   showStatus?: boolean;
+  showTeam?: boolean;
 };
 
-export function IssueListView({
+type IssueListViewProps = Omit<IssueListBodyProps, "showTeam"> & {
+  groupByTeam?: boolean;
+  myTeamId?: string;
+};
+
+export function IssueListView({ groupByTeam = false, myTeamId, ...props }: IssueListViewProps): JSX.Element {
+  if (!groupByTeam || props.issues.length === 0) return <IssueListBody {...props} />;
+
+  return (
+    <Box flexDirection="column">
+      {props.title && <Text>{` ${C.bold}${props.title}${C.reset} ${C.dim}(${props.issues.length})${C.reset}`}</Text>}
+      {groupIssuesByTeam(props.issues, myTeamId).map(group => (
+        <Box key={group.label} flexDirection="column">
+          <SectionHeader label={group.label} count={group.issues.length} color={C.magenta} />
+          <IssueListBody {...props} title={undefined} issues={group.issues} showTeam={false} />
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+function IssueListBody({
   title,
   issues,
   grouped = true,
@@ -184,7 +216,8 @@ export function IssueListView({
   currentUserId,
   showPR = false,
   showStatus = false,
-}: IssueListViewProps): JSX.Element {
+  showTeam = true,
+}: IssueListBodyProps): JSX.Element {
   const width = process.stdout.columns || 100;
 
   if (issues.length === 0) {
@@ -199,6 +232,7 @@ export function IssueListView({
       showStatus,
       rowIndex: rowIndex++,
       showPR,
+      showTeam,
     }));
   };
 
@@ -207,7 +241,7 @@ export function IssueListView({
     return (
       <Box flexDirection="column">
         {title && <Text>{` ${C.bold}${title}${C.reset} ${C.dim}(${issues.length})${C.reset}`}</Text>}
-        <Table columns={issueColumns(width, showPR, true)} rows={rows} showHeader={false} />
+        <Table columns={issueColumns(width, showPR, true, showTeam)} rows={rows} showHeader={false} />
       </Box>
     );
   }
@@ -259,7 +293,7 @@ export function IssueListView({
         return group.length ? (
           <Box flexDirection="column">
             <SectionHeader label={StatusCategory.inProgress.label} count={group.length} color={StatusCategory.inProgress.color} />
-            <Table columns={issueColumns(width, showPR, false)} rows={rowsFor(group)} showHeader={false} />
+            <Table columns={issueColumns(width, showPR, false, showTeam)} rows={rowsFor(group)} showHeader={false} />
           </Box>
         ) : null;
       })()}
@@ -269,7 +303,7 @@ export function IssueListView({
         return group.length ? (
           <Box flexDirection="column">
             <SectionHeader label={StatusCategory.review.label} count={group.length} color={StatusCategory.review.color} />
-            <Table columns={issueColumns(width, showPR, false)} rows={rowsFor(group)} showHeader={false} />
+            <Table columns={issueColumns(width, showPR, false, showTeam)} rows={rowsFor(group)} showHeader={false} />
           </Box>
         ) : null;
       })()}
@@ -279,7 +313,7 @@ export function IssueListView({
         return group.length ? (
           <Box flexDirection="column">
             <SectionHeader label={StatusCategory.ready.label} count={group.length} color={StatusCategory.ready.color} />
-            <Table columns={issueColumns(width, showPR, false)} rows={rowsFor(group)} showHeader={false} />
+            <Table columns={issueColumns(width, showPR, false, showTeam)} rows={rowsFor(group)} showHeader={false} />
           </Box>
         ) : null;
       })()}
@@ -302,7 +336,7 @@ export function IssueListView({
               return (
                 <Box key={group} flexDirection="column" marginLeft={2}>
                   <Text>{`${C.dim}▸ ${group} (${groupIssues.length})${C.reset}`}</Text>
-                  <Table columns={issueColumns(width, showPR, false)} rows={rowsFor(groupIssues)} showHeader={false} />
+                  <Table columns={issueColumns(width, showPR, false, showTeam)} rows={rowsFor(groupIssues)} showHeader={false} />
                 </Box>
               );
             })}
@@ -317,7 +351,7 @@ export function IssueListView({
           return (
             <Box flexDirection="column">
               <SectionHeader label={StatusCategory.done.label} count={done.length} color={StatusCategory.done.color} />
-              <Table columns={issueColumns(width, showPR, false)} rows={rowsFor(done)} showHeader={false} />
+              <Table columns={issueColumns(width, showPR, false, showTeam)} rows={rowsFor(done)} showHeader={false} />
             </Box>
           );
         }
@@ -407,6 +441,8 @@ type SprintViewProps = {
   wasMineKeys?: Set<string>;
   qaAccountIds?: Set<string>;
   showPR?: boolean;
+  groupByTeam?: boolean;
+  myTeamId?: string;
 };
 
 export function SprintView({
@@ -420,6 +456,8 @@ export function SprintView({
   wasMineKeys,
   qaAccountIds,
   showPR = false,
+  groupByTeam = false,
+  myTeamId,
 }: SprintViewProps): JSX.Element {
   let filteredIssues = issues;
   if (mineOnly && currentUserId) {
@@ -445,6 +483,8 @@ export function SprintView({
           currentUserId={currentUserId}
           prMap={prMap}
           showPR={showPR}
+          groupByTeam={groupByTeam}
+          myTeamId={myTeamId}
         />
       )}
     </Box>
@@ -591,6 +631,8 @@ type SearchResultsViewProps = {
   currentUserId?: string;
   showPR?: boolean;
   prMap?: PRMap;
+  groupByTeam?: boolean;
+  myTeamId?: string;
 };
 
 const HL_ON = "\x1b[4m\x1b[1m"; // underline + bold
@@ -604,6 +646,8 @@ export function SearchResultsView({
   currentUserId,
   showPR = false,
   prMap,
+  groupByTeam = false,
+  myTeamId,
 }: SearchResultsViewProps): JSX.Element {
   const width = process.stdout.columns || 100;
 
@@ -612,17 +656,6 @@ export function SearchResultsView({
   }
 
   const terms = query.toLowerCase().split(/\s+/).filter(t => t && !isStopWord(t));
-
-  // Separate done issues
-  const doneIssues: IssueData[] = [];
-  const activeIssues: IssueData[] = [];
-  for (const issue of issues) {
-    if (StatusCategory.done.statuses.includes(issue.status)) {
-      doneIssues.push(issue);
-    } else {
-      activeIssues.push(issue);
-    }
-  }
 
   const buildResultLines = (items: IssueData[]): string[] => {
     const lines: string[] = [];
@@ -645,7 +678,8 @@ export function SearchResultsView({
       const statusStr = `${statusColor}${issue.status}${C.reset}`;
       const prStr = showPR ? ` ${formatPRStatus(prMap?.get(issue.key))}` : "";
 
-      const rightParts = [assigneeStr, dateStr, prioStr, statusStr].filter(Boolean);
+      const teamStr = groupByTeam ? "" : formatTeam(issue, TeamWidth);
+      const rightParts = [teamStr, assigneeStr, dateStr, prioStr, statusStr].filter(Boolean);
       if (prStr) rightParts.push(prStr);
       const rightSide = rightParts.join(`${C.dim}  ${C.reset}`);
       const rightVisibleLen = stripAnsi(rightSide).length;
@@ -684,33 +718,44 @@ export function SearchResultsView({
     return lines;
   };
 
-  const activeLines = buildResultLines(activeIssues);
+  const buildSectionLines = (items: IssueData[]): string[] => {
+    const doneIssues = items.filter(issue => StatusCategory.done.statuses.includes(issue.status));
+    const activeIssues = items.filter(issue => !StatusCategory.done.statuses.includes(issue.status));
+    const activeLines = buildResultLines(activeIssues);
 
-  let doneLines: string[] = [];
-  if (doneIssues.length > 0) {
-    if (expandDone) {
-      doneLines = buildResultLines(doneIssues);
-    } else {
-      const statusCounts = new Map<string, number>();
-      for (const issue of doneIssues) {
-        statusCounts.set(issue.status, (statusCounts.get(issue.status) || 0) + 1);
+    let doneLines: string[] = [];
+    if (doneIssues.length > 0) {
+      if (expandDone) {
+        doneLines = buildResultLines(doneIssues);
+      } else {
+        const statusCounts = new Map<string, number>();
+        for (const issue of doneIssues) {
+          statusCounts.set(issue.status, (statusCounts.get(issue.status) || 0) + 1);
+        }
+        const summary = Array.from(statusCounts.entries())
+          .map(([status, count]) => `${status}: ${count}`)
+          .join("  ·  ");
+        doneLines = [
+          "",
+          ` ${C.dim}${C.bold}DONE${C.reset} ${C.dim}✓ ${doneIssues.length} collapsed [--e to show]${C.reset}`,
+          `   ${C.dim}└─ ${summary}${C.reset}`,
+        ];
       }
-      const summary = Array.from(statusCounts.entries())
-        .map(([status, count]) => `${status}: ${count}`)
-        .join("  ·  ");
-      doneLines = [
-        "",
-        ` ${C.dim}${C.bold}DONE${C.reset} ${C.dim}✓ ${doneIssues.length} collapsed [--e to show]${C.reset}`,
-        `   ${C.dim}└─ ${summary}${C.reset}`,
-      ];
     }
-  }
+    return [...activeLines, ...doneLines];
+  };
+
+  const bodyLines = groupByTeam
+    ? groupIssuesByTeam(issues, myTeamId).flatMap(group => [
+        ` ${C.magenta}${C.bold}${group.label}${C.reset} ${C.dim}(${group.issues.length})${C.reset}`,
+        ...buildSectionLines(group.issues),
+      ])
+    : buildSectionLines(issues);
 
   const allLines = [
     ` ${C.bold}Search Results${C.reset}${query ? ` ${C.dim}for '${query}'${C.reset}` : ""} ${C.dim}(${issues.length})${C.reset}`,
     "",
-    ...activeLines,
-    ...doneLines,
+    ...bodyLines,
   ];
 
   return <LineBlock lines={allLines} />;

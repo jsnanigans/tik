@@ -36,6 +36,7 @@ Edit `~/.config/tik/config.local.json` for your Jira instance. `jiraBase`, `defa
 tik                          # my tickets in the current sprint
 tik sprint -a                # the whole team's sprint
 tik mine                     # my open tickets
+tik mine --group-by team       # my open tickets, one section per team
 tik view PROJ-123 -A         # details with description, AC and testing instructions
 tik search "login bug"       # fuzzy text search
 tik search -p PROJ -t Bug -s "In Progress" -a me

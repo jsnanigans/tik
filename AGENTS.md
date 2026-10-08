@@ -5,7 +5,7 @@
 ## Conventions
 
 - **Output**: `--json` for parsing, `--plain` for tab-separated rows (`KEY STATUS SUMMARY ASSIGNEE POINTS`). Both work on every command. `--json` on list commands returns `{"issues": [...]}` with raw Jira fields; `tik sprint --json` returns `{"sprint": {...}, "issues": [...]}`.
-- **Fresh data**: reads use the cache. Add `-F` (`--fresh`) to sync from Jira first, or run `tik sync`.
+- **Fresh data**: reads use the cache. Add `-F` (`--fresh`) to sync from Jira first, or run `tik sync`. Table output of any command that reads the cache ends with `Synced <age> ago` (never in `--json`/`--plain`).
 - **Ticket keys**: `PROJ-123`. Most commands fall back to the key in the git branch name (`feature/PROJ-123-foo`) when `KEY` is omitted. A partial key (`123`, or `p123` with a configured project alias) is resolved against the cache. `move`, `link`, `unlink` and `attach embed` always need an explicit key.
 - **Short flags**: citty parses `-s` and `-S` as the same key, so no command defines both. Sprint scoping is always the long flag `--current-sprint`.
 - **Rich text** (`-d`, `--ac`, `--ti`, comments) takes markdown, converted to Jira's ADF. A value that looks like a path (contains `/`, starts with `./` or `~/`, ends in `.md`/`.txt`/`.markdown`) and exists is read as a file; quote literal text that could be mistaken for one.
@@ -16,8 +16,8 @@
 
 | Command | Purpose |
 |---|---|
-| `tik`, `tik sprint` | My tickets in the active sprint. `-a` all team, `-e` expand done, `-i` info only, `-g` goals, `--type`, `--grep` |
-| `tik mine` | All my open tickets (`-e`, `--type`, `--grep`) |
+| `tik`, `tik sprint` | My tickets in the active sprint. `-a` all team, `-e` expand done, `-i` info only, `-g` goals, `--type`, `--grep`, `--team`, `--group-by team` |
+| `tik mine` | All my open tickets (`-e`, `--type`, `--grep`, `--team`, `--group-by team`) |
 | `tik prio` | P1/P2 tickets in the sprint |
 | `tik view [KEY]` | Details. `-d` description, `--ac`, `--ti`, `-A` all three |
 | `tik export [KEY]` | Full markdown copy fetched live: fields, links, attachments, description, AC, TI, comments, changelog |
@@ -51,7 +51,9 @@ Text search is not JQL: JQL passed as the query returns nothing. Use `--jql` or 
 
 Filters: `-p` project, `-t` type, `-s` status, `-a` assignee (`me`, `none`, a name), `-l` labels (all comma-separated), `--priority` (1-5 or name), `--epic KEY`, `--points N|>N|1-5|none|any`, `--updated=-7d` (use `=` before a leading `-`).
 
-More filters: `-r` reporter (`me` or a name), `--my-created`, `--created` and `--resolved` (same formats as `--updated`), `--stale N` (not updated in N days), `--parent KEY`, `--my-team`, `--current-sprint` (your board's active sprint), `--sprint ID|none`, `--backlog` (no sprint, not done), `--recent`. Invalid values abort the command. `tik timeline` accepts `--current-sprint` and `--sprint` too.
+More filters: `-r` reporter (`me` or a name), `--my-created`, `--created` and `--resolved` (same formats as `--updated`), `--stale N` (not updated in N days), `--parent KEY`, `--my-team`, `--team NAME`, `--current-sprint` (your board's active sprint), `--sprint ID|none`, `--backlog` (no sprint, not done), `--recent`. Invalid values abort the command. `tik timeline` accepts `--current-sprint` and `--sprint` too.
+
+Team: list tables show a team column (name from `teamIdNames`, else the Jira team name, `-` for none). `--team NAME` (a `teamIdNames` value or `teamName`, case-insensitive) filters, and `--group-by team` groups into one section per team (your team first, `No team` last) without the column; both work on `mine`, `sprint` and `search`. `--json` carries `team` and `teamId`; `--plain` is unchanged.
 
 Output: `--sort updated|created|resolved|priority|status|key` with `--asc`, `-m N` (default 50; `--count` is capped by it), `--keys`, `--count`, `--compact`, `-e` expand done.
 

@@ -97,6 +97,7 @@ export {
   isValidKey,
   resolveKey,
   getLastSyncTime,
+  isCacheOpen,
   setLastSyncTime,
   getCacheStats,
   upsertFlowState,

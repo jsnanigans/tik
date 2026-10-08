@@ -267,6 +267,10 @@ function getDbPath(): string {
 
 let db: Database | null = null;
 
+export function isCacheOpen(): boolean {
+  return db !== null;
+}
+
 function seedUsersFromConfig(database: Database): void {
   const users = localConfig.users;
   if (!users?.length) return;

@@ -1,9 +1,11 @@
-import { C, stripAnsi } from "../lib";
+import { C, stripAnsi, truncate } from "../lib";
 import { localConfig } from "../lib/config";
 import type { IssueData } from "../lib";
 import { CHECK_FAILURE_CONCLUSIONS, type PRData, type PRCheckRun, type PRReview, type PRMergeStatus } from "../github";
 
 const { statuses } = localConfig;
+
+const NO_TEAM_LABEL = "No team";
 
 export const StatusCategory = {
   inProgress: { label: "IN PROGRESS", color: C.yellow, statuses: statuses.inProgress },
@@ -273,4 +275,30 @@ export function fitAnsi(str: string, width: number): string {
   const plain = stripAnsi(str);
   const truncated = plain.slice(0, width - 1) + "…";
   return `${C.dim}${truncated}${C.reset}`;
+}
+
+export function issueTeamLabel(issue: IssueData): string | null {
+  if (!issue.teamId) return null;
+  return localConfig.teamIdNames[issue.teamId] ?? issue.teamName ?? "other";
+}
+
+export function formatTeam(issue: IssueData, width: number): string {
+  const label = issueTeamLabel(issue);
+  return `${C.dim}${label ? truncate(label, width) : "-"}${C.reset}`;
+}
+
+export function groupIssuesByTeam(
+  issues: IssueData[],
+  myTeamId?: string,
+): { label: string; issues: IssueData[] }[] {
+  const groups = new Map<string, IssueData[]>();
+  for (const issue of issues) {
+    const label = issueTeamLabel(issue) ?? NO_TEAM_LABEL;
+    groups.set(label, [...(groups.get(label) ?? []), issue]);
+  }
+  const rank = (label: string, items: IssueData[]) =>
+    label === NO_TEAM_LABEL ? 2 : items[0].teamId === myTeamId ? 0 : 1;
+  return [...groups]
+    .sort(([a, aItems], [b, bItems]) => rank(a, aItems) - rank(b, bItems) || a.localeCompare(b))
+    .map(([label, items]) => ({ label, issues: items }));
 }

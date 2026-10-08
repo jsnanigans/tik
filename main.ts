@@ -65,6 +65,7 @@ import {
   getBackfillKeys,
   getRecentCachedKeys,
   getLastSyncTime,
+  isCacheOpen,
   setLastSyncTime,
   getCacheStats,
   getCachedIssue,
@@ -236,6 +237,8 @@ let globalExpandDone = false;
 let subCommandExecuted = false;
 let globalGrepFilter: RegExp | null = null;
 let globalTypeFilter: string[] | null = null;
+let globalTeamId: string | null = null;
+let globalGroupByTeam = false;
 /**
  * console.log silently drops everything past the 64KB pipe buffer when the reader is
  * slow (large --json payloads), so all stdout goes through the stream instead.
@@ -269,13 +272,13 @@ async function printSyncAge(): Promise<void> {
   }
   const diffMs = Date.now() - new Date(lastSync).getTime();
   const diffHours = diffMs / (1000 * 60 * 60);
-  const age = formatRelativeDate(lastSync);
+  const age = diffMs < 60_000 ? "just now" : `${formatRelativeDate(lastSync)} ago`;
   if (diffHours > 48) {
-    out(`\n${C.red}⚠ Last sync: ${age} ago${C.reset} — run ${C.cyan}tik sync${C.reset} or use ${C.cyan}-F${C.reset}`);
+    out(`\n${C.red}⚠ Last sync: ${age}${C.reset} — run ${C.cyan}tik sync${C.reset} or use ${C.cyan}-F${C.reset}`);
   } else if (diffHours > 14) {
-    out(`\n${C.yellow}Last sync: ${age} ago — data may be outdated${C.reset}`);
+    out(`\n${C.yellow}Last sync: ${age} — data may be outdated${C.reset}`);
   } else {
-    out(`${C.dim}Synced ${age} ago${C.reset}`);
+    out(`${C.dim}Synced ${age}${C.reset}`);
   }
 }
 
@@ -700,6 +703,7 @@ async function formatIssues(result: unknown, title?: string, grouped: boolean = 
   let issues = parseIssues(result);
   if (globalGrepFilter) issues = issues.filter(i => globalGrepFilter!.test(i.summary));
   if (globalTypeFilter) issues = issues.filter(i => globalTypeFilter!.includes(i.issueType.toLowerCase()));
+  if (globalTeamId) issues = issues.filter(i => i.teamId === globalTeamId);
 
   switch (globalFormat) {
     case "json":
@@ -730,6 +734,8 @@ async function formatIssues(result: unknown, title?: string, grouped: boolean = 
         prMap,
         showPR: globalShowPR,
         showStatus: !grouped,
+        groupByTeam: globalGroupByTeam,
+        myTeamId: localConfig.myTeamId,
       }));
       return;
   }
@@ -743,6 +749,7 @@ async function formatSprintView(
 ): Promise<void> {
   let filteredIssues = globalGrepFilter ? issues.filter(i => globalGrepFilter!.test(i.summary)) : issues;
   if (globalTypeFilter) filteredIssues = filteredIssues.filter(i => globalTypeFilter!.includes(i.issueType.toLowerCase()));
+  if (globalTeamId) filteredIssues = filteredIssues.filter(i => i.teamId === globalTeamId);
 
   if (globalFormat === "table") {
     await renderStatic(React.createElement(SprintView, {
@@ -756,6 +763,8 @@ async function formatSprintView(
       wasMineKeys: options.wasMineKeys,
       qaAccountIds: getQaAccountIds(),
       showPR: globalShowPR,
+      groupByTeam: globalGroupByTeam,
+      myTeamId: localConfig.myTeamId,
     }));
     return;
   }
@@ -1620,10 +1629,9 @@ async function buildSearchOpts(args: Record<string, unknown>, creds: Credentials
     opts.parentKey = args.parent.toUpperCase();
   }
 
-  if (args["my-team"]) {
-    requireCustomField("team");
-    opts.teamId = Config.myTeamId;
-  }
+  if (args["my-team"]) opts.teamId = Config.myTeamId;
+  if (globalTeamId) opts.teamId = globalTeamId;
+  if (opts.teamId) requireCustomField("team");
 
   if (typeof args.sprint === "string") {
     requireCustomField("sprint");
@@ -1737,13 +1745,13 @@ async function runLocalSearch(args: Record<string, unknown>, creds: Credentials,
       expandDone: globalExpandDone,
       currentUserId,
       showPR: globalShowPR,
+      groupByTeam: globalGroupByTeam,
+      myTeamId: localConfig.myTeamId,
     }));
-    await printSyncAge();
     return;
   }
 
   await formatIssues(result, title, false);
-  await printSyncAge();
 }
 
 function compactTextDiff(oldText?: string, newText?: string, maxWidth?: number): string {
@@ -3427,6 +3435,8 @@ const searchCommand = defineCommand({
     parent: { type: "string", description: "Show subtasks of a parent ticket (e.g., --parent PROJ-50)" },
     // Team & points
     "my-team": { type: "boolean", description: "Limit results to your team" },
+    team: { type: "string", description: "Filter by team name (see teamIdNames in config)" },
+    "group-by": { type: "string", description: "Group results by: team" },
     points: { type: "string", description: "Filter by story points — exact (3), comparison (>0, >=2), range (1-5), 'none', or 'any'" },
     // Convenience shortcuts
     recent: { type: "boolean", description: "Shortcut: tickets updated in the last 7 days" },
@@ -3452,6 +3462,7 @@ const searchCommand = defineCommand({
   run: async ({ args }) => {
     subCommandExecuted = true;
     applyFormat(args);
+    applyListOptions(args);
     const creds = await getCredentials(args);
 
     // Positional query → treat as text search
@@ -3475,7 +3486,7 @@ const searchCommand = defineCommand({
       typeof args.epic === "string" || typeof args.points === "string" ||
       typeof args.updated === "string" || typeof args.r === "string" ||
       typeof args.created === "string" || typeof args.resolved === "string" ||
-      typeof args.parent === "string" ||
+      typeof args.parent === "string" || typeof args.team === "string" ||
       args["current-sprint"] || typeof args.sprint === "string" ||
       args["my-team"] || args.recent || typeof args.stale === "string" ||
       args.backlog || args["my-created"];
@@ -3540,10 +3551,13 @@ const main = defineCommand({
         F: { type: "boolean", alias: "fresh", description: "Sync before running" },
         grep: { type: "string", description: "Filter issues by summary (regex)" },
         type: { type: "string", description: "Issue type filter (Bug, Task, Story, Spike) - comma-separated" },
+        team: { type: "string", description: "Filter by team name (see teamIdNames in config)" },
+        "group-by": { type: "string", description: "Group by: team" },
       },
       run: async ({ args }) => {
         subCommandExecuted = true;
         applyFormat(args);
+        applyListOptions(args);
         const creds = await getCredentials(args);
         await ensureCacheOrFresh(creds, args);
 
@@ -3560,7 +3574,6 @@ const main = defineCommand({
         } else {
           await formatIssues({ issues: rawIssues }, "My Open Tickets", true);
         }
-        await printSyncAge();
       },
     }),
     standup: defineCommand({
@@ -3745,7 +3758,6 @@ const main = defineCommand({
         } else {
           await renderPrioView(undefined);
         }
-        await printSyncAge();
       },
     }),
     triage: defineCommand({
@@ -3948,7 +3960,6 @@ const main = defineCommand({
           if (globalFormat === "json") {
             out(JSON.stringify(jsonResults, null, 2));
           }
-          await printSyncAge();
           return;
         }
 
@@ -3983,7 +3994,6 @@ const main = defineCommand({
         } else {
           await formatIssue(cached.raw, undefined, links, { ...opts, extraJson });
         }
-        await printSyncAge();
       },
     }),
     get: defineCommand({
@@ -4152,7 +4162,6 @@ const main = defineCommand({
         const history = parseHistory(cached.raw, changelog);
         const historyLines = await buildHistoryLines(history);
         await renderStatic(React.createElement(HistoryView, { lines: historyLines }));
-        await printSyncAge();
       },
     }),
     export: exportCommand,
@@ -4317,7 +4326,6 @@ const main = defineCommand({
         }
 
         await renderStatic(React.createElement(TimelineView, { data: timelineData, expandNoDate: !!args.e }));
-        await printSyncAge();
       },
     }),
     open: defineCommand({
@@ -5078,10 +5086,13 @@ const main = defineCommand({
         F: { type: "boolean", alias: "fresh", description: "Sync before running" },
         grep: { type: "string", description: "Filter issues by summary (regex)" },
         type: { type: "string", description: "Issue type filter (Bug, Task, Story, Spike) - comma-separated" },
+        team: { type: "string", description: "Filter by team name (see teamIdNames in config)" },
+        "group-by": { type: "string", description: "Group by: team" },
       },
       run: async ({ args }) => {
         subCommandExecuted = true;
         applyFormat(args);
+        applyListOptions(args);
         const creds = await getCredentials(args);
         await ensureCacheOrFresh(creds, args);
 
@@ -5094,8 +5105,8 @@ const main = defineCommand({
         const sprint = parseSprint(localData.sprint);
         const issues = parseIssues({ issues: localData.rawIssues });
 
-        if (args.g) { await formatSprintGoals(sprint); await printSyncAge(); return; }
-        if (args.i) { await formatSprint(localData.sprint); await printSyncAge(); return; }
+        if (args.g) { await formatSprintGoals(sprint); return; }
+        if (args.i) { await formatSprint(localData.sprint); return; }
 
         if (globalFormat === "json") {
           out(JSON.stringify({ sprint, issues: { issues: localData.rawIssues } }, null, 2));
@@ -5140,7 +5151,6 @@ const main = defineCommand({
             wasMineKeys: wasMine,
           });
         }
-        await printSyncAge();
       },
     }),
     sprints: defineCommand({
@@ -5771,7 +5781,6 @@ const main = defineCommand({
       const rawIssues = getLocalMineIssues(accountId, getQaAccountIds());
       out("No active sprint found, showing my tickets instead");
       await formatIssues({ issues: rawIssues }, "My Open Tickets", true);
-      await printSyncAge();
       return;
     }
 
@@ -5820,7 +5829,6 @@ const main = defineCommand({
         wasMineKeys: wasMine,
       });
     }
-    await printSyncAge();
   },
 });
 
@@ -5847,6 +5855,21 @@ function applyFormat(args: Record<string, unknown>): void {
   } else {
     globalTypeFilter = null;
   }
+}
+
+function applyListOptions(args: Record<string, unknown>): void {
+  globalTeamId = typeof args.team === "string" ? resolveTeamId(args.team) : null;
+  const groupBy = args["group-by"];
+  if (groupBy !== undefined && groupBy !== "team") emitError("invalid_group_by", `Invalid --group-by '${groupBy}'. Use team.`);
+  globalGroupByTeam = groupBy === "team";
+}
+
+function resolveTeamId(name: string): string {
+  const teams = Object.entries(TeamIdNames);
+  if (localConfig.myTeamId && localConfig.teamName) teams.push([localConfig.myTeamId, localConfig.teamName]);
+  const match = teams.find(([, teamName]) => teamName.toLowerCase() === name.toLowerCase());
+  if (!match) emitError("invalid_team", `Unknown team '${name}'. Use ${[...new Set(teams.map(([, teamName]) => teamName.toLowerCase()))].join(", ")}.`);
+  return match[0];
 }
 
 async function getCredentials(args: Record<string, unknown>): Promise<Credentials> {
@@ -5889,4 +5912,5 @@ process.on("unhandledRejection", (err) => {
 });
 
 await runMain(main);
+if (isCacheOpen()) await printSyncAge();
 await flushStdout();
