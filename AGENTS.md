@@ -31,6 +31,7 @@
 | `tik timeline [QUERY]` | Gantt lanes from changelog for a key or search text. `--no-expand` skips related tickets |
 | `tik pr [KEY]` | PR state, reviews, CI, merge readiness (`--ci`, `--reviews`, `--merge`, `-a`, `--mine`, `--repo`, `--project`, `--org`, `--state` open, merged, closed or all) |
 | `tik open [KEY]`, `tik branch` | Open in browser; show the branch's ticket |
+| `tik open-preview app\|pmp [KEY]` | Open the ticket's PR preview deployment (user-frontend). Reads the URL from the PR's deploy comment and stores it locally; `-F` re-reads it. `--plain` prints the URL |
 | `tik whoami`, `tik users` | Identity; user directory |
 
 `--pr` on `tik`, `sprint`, `mine`, `view` and `search` adds PR status to tickets.
