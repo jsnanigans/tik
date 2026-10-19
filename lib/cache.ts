@@ -259,6 +259,16 @@ CREATE TABLE IF NOT EXISTS pr_cache (
 );
 CREATE INDEX IF NOT EXISTS idx_pr_cache_repo ON pr_cache(repo);
 CREATE INDEX IF NOT EXISTS idx_pr_cache_state ON pr_cache(state);
+
+-- Preview deployment URLs per ticket, read from the PR's preview comment
+CREATE TABLE IF NOT EXISTS preview_urls (
+  key TEXT PRIMARY KEY,
+  repo TEXT NOT NULL,
+  pr_number INTEGER NOT NULL,
+  pmp TEXT,
+  userapp TEXT,
+  cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 function getDbPath(): string {
@@ -2254,4 +2264,22 @@ export function getCachedPRs(opts?: {
   }));
 
   return { prs, isStale };
+}
+
+// ─── Preview URL Cache ───────────────────────────────────────────────
+
+export type PreviewUrls = { pmp?: string; userapp?: string };
+
+export function getCachedPreview(key: string): (PreviewUrls & { prNumber: number }) | null {
+  const row = getDb().query("SELECT pr_number, pmp, userapp FROM preview_urls WHERE key = ?").get(key) as
+    { pr_number: number; pmp: string | null; userapp: string | null } | undefined;
+  if (!row) return null;
+  return { prNumber: row.pr_number, pmp: row.pmp ?? undefined, userapp: row.userapp ?? undefined };
+}
+
+export function cachePreview(key: string, repo: string, prNumber: number, urls: PreviewUrls): void {
+  getDb().query(`
+    INSERT OR REPLACE INTO preview_urls (key, repo, pr_number, pmp, userapp, cached_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+  `).run(key, repo, prNumber, urls.pmp ?? null, urls.userapp ?? null);
 }

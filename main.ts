@@ -104,6 +104,7 @@ import {
   runCommandResult,
   CHECK_FAILURE_CONCLUSIONS,
   fetchPRsForTickets,
+  fetchPreviewUrls,
   getPRForTicket,
   getPRForBranch,
   fetchPRDetail,
@@ -146,6 +147,9 @@ import {
   searchPagesInCache,
   cachePRs,
   getCachedPRs,
+  getCachedPreview,
+  cachePreview,
+  type PreviewUrls,
 } from "./lib";
 import { renderStatic } from "./ui/render";
 import { IssueListView, SearchResultsView, SprintGoalsView, SprintView, SprintSummaryView, LinksView, CommentsView, HelpView } from "./ui/views";
@@ -2913,6 +2917,34 @@ async function cmdOpen(args: string[]): Promise<void> {
   }
 }
 
+async function cmdOpenPreview(target: "app" | "pmp", args: string[], fresh: boolean): Promise<void> {
+  const key = await requireTicket(args);
+  const field = target === "app" ? "userapp" : "pmp";
+  let urls: PreviewUrls | null = fresh ? null : getCachedPreview(key);
+
+  if (!urls?.[field]) {
+    const repo = getRepoForProject(key.split("-")[0]);
+    if (!repo) emitError("no_repo", `No GitHub repo mapping for project ${key.split("-")[0]}`);
+    const pr = await getPRForTicket(key, false);
+    if (!pr) emitError("no_pr", `No PR found for ${key}`);
+    urls = (await fetchPreviewUrls(repo, pr.number)) ?? null;
+    if (urls) cachePreview(key, repo, pr.number, urls);
+    else emitError("no_preview", `No preview deployment on ${repo}#${pr.number} (not deployed yet, or this repo has no previews)`);
+  }
+
+  const url = urls?.[field];
+  if (!url) emitError("no_preview", `${key} has no ${target} preview deployment`);
+
+  if (globalFormat === "json") {
+    out(JSON.stringify({ key, target, url }, null, 2));
+  } else if (globalFormat === "plain") {
+    out(url);
+  } else {
+    out(`${C.dim}Opening${C.reset} ${formatProjectKey(key)} ${target} ${C.dim}preview...${C.reset}`);
+    Bun.spawn(["open", url]);
+  }
+}
+
 async function cmdBranch(creds: Credentials): Promise<void> {
   if (!(await ensureInsideGitRepo())) {
     console.error("Error: Not in a git repository");
@@ -4338,6 +4370,22 @@ const main = defineCommand({
         applyFormat(args);
         const cmdArgs = typeof args.key === "string" ? [args.key] : [];
         await cmdOpen(cmdArgs);
+      },
+    }),
+    "open-preview": defineCommand({
+      meta: { description: "Open the ticket's PR preview deployment (app or pmp) in browser" },
+      args: {
+        target: { type: "positional", required: true, description: "app or pmp" },
+        key: { type: "positional", required: false, description: "Ticket key (default: from branch)" },
+        F: { type: "boolean", alias: "fresh", description: "Skip the stored URL and read it from the PR again" },
+      },
+      run: async ({ args }) => {
+        subCommandExecuted = true;
+        applyFormat(args);
+        const target = String(args.target).toLowerCase();
+        if (target !== "app" && target !== "pmp") emitError("invalid_target", `Invalid target '${args.target}'. Use app or pmp.`);
+        const cmdArgs = typeof args.key === "string" ? [args.key] : [];
+        await cmdOpenPreview(target, cmdArgs, !!args.F);
       },
     }),
     o: defineCommand({

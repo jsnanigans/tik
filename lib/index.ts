@@ -61,6 +61,7 @@ export {
   type PRGateResult,
   CHECK_FAILURE_CONCLUSIONS,
   fetchPRsForTickets,
+  fetchPreviewUrls,
   getPRForTicket,
   getPRForBranch,
   fetchPRDetail,
@@ -130,6 +131,9 @@ export {
   type CachedPage,
   type CachedPR,
   cachePRs,
+  getCachedPreview,
+  cachePreview,
+  type PreviewUrls,
   getCachedPRs,
 } from "./cache";
 export { highlightTerms, findExcerpts } from "./fuzzy";

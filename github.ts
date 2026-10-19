@@ -152,10 +152,11 @@ function computeChecksStatus(checks: GhCheckRun[] | null): PRData["checksStatus"
   return "SUCCESS";
 }
 
-async function fetchPRsForRepo(repo: string): Promise<PRData[]> {
+async function fetchPRsForRepo(repo: string, withChecks = true): Promise<PRData[]> {
+  const fields = "number,title,url,headRefName,state,isDraft,updatedAt,reviewDecision";
   const output = await runCommand([
     "gh", "pr", "list", "--repo", repo, "--state", "all", "--limit", "300",
-    "--json", "number,title,url,headRefName,state,isDraft,updatedAt,reviewDecision,statusCheckRollup",
+    "--json", withChecks ? `${fields},statusCheckRollup` : fields,
   ]);
   if (!output) return [];
 
@@ -273,8 +274,9 @@ export async function fetchRecentPRAuthorActivity(repos: string[], cutoff: Date)
   return results.flat().sort((a, b) => new Date(b.activityAt).getTime() - new Date(a.activityAt).getTime());
 }
 
-export async function getPRForTicket(ticketKey: string): Promise<PRData | undefined> {
-  const prMap = await fetchPRsForTickets([ticketKey]);
+/** `withChecks: false` skips the CI rollup, which makes the 300-PR query large enough to 504 on GitHub. */
+export async function getPRForTicket(ticketKey: string, withChecks = true): Promise<PRData | undefined> {
+  const prMap = await fetchPRsForTickets([ticketKey], withChecks);
   return prMap.get(ticketKey);
 }
 
@@ -342,7 +344,26 @@ export async function openPullRequest(repo: string, branch: string): Promise<boo
   return result.ok;
 }
 
-export async function fetchPRsForTickets(ticketKeys: string[]): Promise<PRMap> {
+/** Preview URLs from the deploy bot's `<!-- preview-state: {...} -->` comment; the last one wins. */
+export async function fetchPreviewUrls(repo: string, number: number): Promise<{ pmp?: string; userapp?: string } | undefined> {
+  const output = await runCommand(["gh", "pr", "view", String(number), "--repo", repo, "--json", "comments"]);
+  if (!output) return undefined;
+
+  try {
+    const { comments } = JSON.parse(output) as { comments: Array<{ body: string }> };
+    for (const comment of comments.reverse()) {
+      const match = comment.body.match(/<!-- preview-state: (\{.*?\}) -->/);
+      if (!match) continue;
+      const state = JSON.parse(match[1]) as { pmp?: string; userapp?: string };
+      return { pmp: state.pmp, userapp: state.userapp };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+export async function fetchPRsForTickets(ticketKeys: string[], withChecks = true): Promise<PRMap> {
   const prMap: PRMap = new Map();
   const wanted = new Set(ticketKeys.map(k => k.toUpperCase()));
 
@@ -356,7 +377,7 @@ export async function fetchPRsForTickets(ticketKeys: string[]): Promise<PRMap> {
   if (reposNeeded.size === 0) return prMap;
 
   const repoArray = Array.from(reposNeeded);
-  const results = await Promise.all(repoArray.map(fetchPRsForRepo));
+  const results = await Promise.all(repoArray.map(repo => fetchPRsForRepo(repo, withChecks)));
 
   for (const prs of results) {
     for (const pr of prs) {
