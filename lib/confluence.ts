@@ -1,6 +1,7 @@
 import { type Credentials, makeAuthHeader } from "./credentials";
 import { localConfig } from "./config";
-import { markdownToAdf, adfToMarkdown } from "./markdown";
+import { adfToMarkdown } from "./markdown";
+import { markdownToAdf } from "./adf-codec";
 
 const CONFLUENCE_BASE = `${localConfig.jiraBase}/wiki`;
 

@@ -4,13 +4,14 @@ import { homedir } from "os";
 import Ajv from "ajv";
 import { canonicalize, equivalent } from "../lib/adf-reconcile";
 import { customFields } from "../lib/config";
-import { adfToMarkdown, markdownToAdf, type AdfNode } from "../lib/markdown";
+import { adfToEditMarkdown, markdownToAdf } from "../lib/adf-codec";
+import type { AdfNode } from "../lib/markdown";
 
-const preserveUnknown = process.argv.includes("--preserve-unknown");
-const toMarkdown = (adf: AdfNode) => adfToMarkdown(adf, { preserveUnknown });
+const toMarkdown = adfToEditMarkdown;
 const toAdf = markdownToAdf;
 
-const PLACEHOLDER_RE = /\]\((?:tikmedia|tikadf):/;
+// Readable: no placeholder and no generic directive (`adf=` / `marks=` attributes).
+const GENERIC_RE = /\]\((?:tikmedia|tikadf):|\{[^}\n]*\b(?:adf|marks)=/;
 const TOP_DIFFS = 15;
 const CRASH_EXAMPLES = 5;
 
@@ -72,7 +73,7 @@ function roundTrip(adf: AdfNode): Outcome {
     const once = toAdf(markdown);
     const twice = toAdf(toMarkdown(once));
     outcome.exact = equivalent(adf, once);
-    outcome.readable = outcome.exact && !PLACEHOLDER_RE.test(markdown);
+    outcome.readable = outcome.exact && !GENERIC_RE.test(markdown);
     outcome.idempotent = equivalent(once, twice);
     outcome.valid = validate(once) as boolean;
     if (!outcome.exact) outcome.diffs = differingConstructs(adf, once);
@@ -140,7 +141,7 @@ const sources: Record<string, Iterable<Field> | null> = {
   comments: await sampleFields("comments.json", (comment) => `${comment.key} comment ${comment.id}`),
 };
 
-const report: Record<string, unknown> = { date: new Date().toISOString().slice(0, 10), preserveUnknown, sources: {} };
+const report: Record<string, unknown> = { date: new Date().toISOString().slice(0, 10), sources: {} };
 for (const [name, fields] of Object.entries(sources)) {
   if (!fields) {
     console.log(`${name}: no samples (run eval/fetch-samples.ts)`);
@@ -160,7 +161,6 @@ for (const [name, fields] of Object.entries(sources)) {
 report.seconds = Math.round((performance.now() - started) / 100) / 10;
 const reportsDir = `${import.meta.dir}/../reports`;
 mkdirSync(reportsDir, { recursive: true });
-const suffix = preserveUnknown ? "-preserve-unknown" : "";
-const path = `${reportsDir}/roundtrip-${report.date}${suffix}.json`;
+const path = `${reportsDir}/roundtrip-${report.date}.json`;
 await Bun.write(path, JSON.stringify(report, null, 2) + "\n");
 console.log(`${report.seconds}s, report: ${path}`);

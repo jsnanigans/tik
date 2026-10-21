@@ -246,12 +246,13 @@
           "content": [
             {
               "type": "text",
-              "text": "line one line two line three"
+              "text": "line one\nline two\nline three"
             }
           ]
         }
       ]
-    }
+    },
+    "deviation": "A newline inside a paragraph is kept in the text: ADF text can hold newlines (195 corpus fields), so joining with a space would not round-trip."
   },
   {
     "name": "trailing whitespace trimmed",
@@ -558,6 +559,9 @@
       "content": [
         {
           "type": "orderedList",
+          "attrs": {
+            "order": 3
+          },
           "content": [
             {
               "type": "listItem",
@@ -590,7 +594,8 @@
           ]
         }
       ]
-    }
+    },
+    "deviation": "The start number is kept as the list's order attribute."
   },
   {
     "name": "list item with inline marks",
@@ -767,21 +772,15 @@
               "content": [
                 {
                   "type": "text",
-                  "text": "quoted"
-                },
-                {
-                  "type": "hardBreak"
-                },
-                {
-                  "type": "text",
-                  "text": "more"
+                  "text": "quoted\nmore"
                 }
               ]
             }
           ]
         }
       ]
-    }
+    },
+    "deviation": "A newline inside a quoted paragraph is kept in the text instead of becoming a hard break."
   },
   {
     "name": "table with header",
@@ -905,78 +904,17 @@
       "version": 1,
       "content": [
         {
-          "type": "table",
+          "type": "paragraph",
           "content": [
             {
-              "type": "tableRow",
-              "content": [
-                {
-                  "type": "tableHeader",
-                  "content": [
-                    {
-                      "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "a"
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "type": "tableHeader",
-                  "content": [
-                    {
-                      "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "b"
-                        }
-                      ]
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              "type": "tableRow",
-              "content": [
-                {
-                  "type": "tableCell",
-                  "content": [
-                    {
-                      "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "1"
-                        }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  "type": "tableCell",
-                  "content": [
-                    {
-                      "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "2"
-                        }
-                      ]
-                    }
-                  ]
-                }
-              ]
+              "type": "text",
+              "text": "| a | b |\n| 1 | 2 |"
             }
           ]
         }
       ]
-    }
+    },
+    "deviation": "Without a delimiter row this is not a GFM table, so it stays a paragraph."
   },
   {
     "name": "media placeholder on own line",
@@ -1086,20 +1024,24 @@
           "content": [
             {
               "type": "text",
-              "text": "**x**",
+              "text": "x",
               "marks": [
                 {
                   "type": "link",
                   "attrs": {
                     "href": "http://a.b"
                   }
+                },
+                {
+                  "type": "strong"
                 }
               ]
             }
           ]
         }
       ]
-    }
+    },
+    "deviation": "Marks nest: the link text is bold instead of the literal characters **x**."
   },
   {
     "name": "empty input",

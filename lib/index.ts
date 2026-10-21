@@ -29,7 +29,8 @@ export {
   parseIssueLinks,
   extractTeam,
 } from "./parser";
-export { type AdfNode, markdownToAdf, adfToMarkdown, jiraWikiToMarkdown, decodeMediaPlaceholder, makeMediaPlaceholder } from "./markdown";
+export { type AdfNode, adfToMarkdown, jiraWikiToMarkdown, decodeMediaPlaceholder, makeMediaPlaceholder } from "./markdown";
+export { markdownToAdf, adfToEditMarkdown, parseMarkdown } from "./adf-codec";
 export {
   type CommandResult,
   runCommand,

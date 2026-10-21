@@ -46,7 +46,7 @@ function canonicalMarks(marks: AdfNode["marks"]): AdfNode["marks"] {
     .sort((a, b) => markRank(a) - markRank(b) || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0));
 }
 
-function mergeText(nodes: AdfNode[]): AdfNode[] {
+export function mergeText(nodes: AdfNode[]): AdfNode[] {
   const merged: AdfNode[] = [];
   for (const node of nodes) {
     const prev = merged[merged.length - 1];
