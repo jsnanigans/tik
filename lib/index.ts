@@ -179,6 +179,7 @@ export {
   resolveSpaceId,
   resolveSpaceKey,
   getConfluencePage,
+  getConfluencePageAdf,
   createConfluencePage,
   updateConfluencePage,
   getPagesInSpace,

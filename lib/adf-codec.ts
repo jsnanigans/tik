@@ -48,15 +48,31 @@ const DEDICATED: Dedicated[] = [
 ];
 
 /** Table, row and cell attributes: ADF name to directive name and value kind. A node with any other attribute uses the generic rule. */
-type Kind = "string" | "number" | "flag" | "numbers";
+type Kind = "string" | "number" | "flag" | "numbers" | "json";
 type AttrSpec = Record<string, [string, Kind]>;
 const TABLE_ATTRS: AttrSpec = { layout: ["layout", "string"], width: ["width", "number"], displayMode: ["displayMode", "string"], isNumberColumnEnabled: ["numbered", "flag"] };
 const CELL_ATTRS: AttrSpec = { colspan: ["colspan", "number"], rowspan: ["rowspan", "number"], background: ["bg", "string"], valign: ["valign", "string"], colwidth: ["colwidth", "numbers"] };
 const EXPAND_ATTRS: AttrSpec = { title: ["title", "string"] };
-const CONTAINER_ATTRS: Record<string, AttrSpec> = {
-  panel: { panelType: ["type", "string"], panelColor: ["color", "string"], panelIcon: ["icon", "string"], panelIconId: ["iconId", "string"], panelIconText: ["iconText", "string"] },
-  expand: EXPAND_ATTRS,
-  nestedExpand: EXPAND_ATTRS,
+const CONTAINERS: { type: string; name: string; attrs: AttrSpec }[] = [
+  {
+    type: "panel", name: "panel",
+    attrs: { panelType: ["type", "string"], panelColor: ["color", "string"], panelIcon: ["icon", "string"], panelIconId: ["iconId", "string"], panelIconText: ["iconText", "string"] },
+  },
+  { type: "expand", name: "expand", attrs: EXPAND_ATTRS },
+  { type: "nestedExpand", name: "nestedExpand", attrs: EXPAND_ATTRS },
+  { type: "layoutSection", name: "layout", attrs: {} },
+  { type: "layoutColumn", name: "column", attrs: { width: ["width", "number"], valign: ["valign", "string"] } },
+];
+/** `::macro{…}` is an extension, `:::macro{…}` a bodiedExtension and `:macro{…}` an inlineExtension; `params` holds the parameters as JSON. */
+const MACRO_ATTRS: AttrSpec = {
+  extensionKey: ["key", "string"], extensionType: ["type", "string"], layout: ["layout", "string"], text: ["text", "string"], parameters: ["params", "json"],
+};
+const MACRO_TYPES = { leafDirective: "extension", containerDirective: "bodiedExtension", textDirective: "inlineExtension" } as const;
+/** Block marks are attributes of a `:::marks` wrapper; any other mark stays in its `marks` JSON. */
+const BLOCK_MARKS: Record<string, AttrSpec> = {
+  alignment: { align: ["align", "string"] },
+  indentation: { level: ["indent", "number"] },
+  breakout: { mode: ["breakout", "string"], width: ["breakoutWidth", "number"] },
 };
 /** `::media[alt]{…}` is a mediaSingle holding one media; inside `:::mediaGroup` it is the media itself, and `:media[alt]{…}` is a mediaInline. */
 const MEDIA_ATTRS: AttrSpec = {
@@ -119,7 +135,7 @@ function blockToMdast(node: AdfNode): RootContent {
     return {
       type: "containerDirective",
       name: "marks",
-      attributes: { adf: encodeJson(node.marks) },
+      attributes: blockMarkAttributes(node.marks),
       children: [blockToMdast({ ...node, marks: undefined })] as ContainerDirective["children"],
     };
   }
@@ -149,7 +165,14 @@ function nativeBlock(node: AdfNode): RootContent | undefined {
     case "panel":
     case "expand":
     case "nestedExpand":
+    case "layoutSection":
+    case "layoutColumn":
       return containerToMdast(node);
+    case "decisionList":
+      return decisionListToMdast(node);
+    case "extension":
+    case "bodiedExtension":
+      return macroToMdast(node);
     case "rule":
       return noAttrs(node) && !children.length ? { type: "thematicBreak" } : undefined;
     case "table":
@@ -201,6 +224,18 @@ function taskListToMdast(node: AdfNode): List | undefined {
   }
   if (!noAttrs(node) || !children.length) return undefined;
   return { type: "list", ordered: false, start: null, spread: false, children };
+}
+
+/** Decisions are a bullet list in `:::decisions`; an item is inline-only and `DECIDED`, and an empty one is `:empty`. */
+function decisionListToMdast(node: AdfNode): ContainerDirective | undefined {
+  const items = node.content ?? [];
+  const simple = (item: AdfNode) =>
+    item.type === "decisionItem" && Object.keys(attrsOf(item)).length === 1 && attrsOf(item).state === "DECIDED" && (item.content ?? []).every((child) => INLINE_NODES.has(child.type));
+  if (!noAttrs(node) || !items.length || !items.every(simple)) return undefined;
+  const children = items.map((item): ListItem => ({
+    type: "listItem", spread: false, checked: null, children: [{ type: "paragraph", children: item.content?.length ? inlineToMdast(item.content) : [EMPTY_TASK] }],
+  }));
+  return container("decisions", {}, [{ type: "list", ordered: false, start: null, spread: false, children }]);
 }
 
 function codeToMdast(node: AdfNode): RootContent | undefined {
@@ -263,6 +298,8 @@ function encodeAttr(value: unknown, kind: Kind): string | undefined {
       return value === true ? "" : undefined;
     case "numbers":
       return Array.isArray(value) && value.length > 0 && value.every(isNumber) ? value.join(",") : undefined;
+    case "json":
+      return asObject(value) ? encodeJson(value) : undefined;
   }
 }
 
@@ -327,8 +364,32 @@ function tableToMdast(node: AdfNode): RootContent | undefined {
 
 /** A panel needs its `type`; the others may have no attributes. */
 function containerToMdast(node: AdfNode): ContainerDirective | undefined {
-  const attributes = attributesOf(node, CONTAINER_ATTRS[node.type]);
-  return attributes && (node.type !== "panel" || "type" in attributes) ? container(node.type, attributes, blocksToMdast(node.content)) : undefined;
+  const spec = CONTAINERS.find((candidate) => candidate.type === node.type)!;
+  const attributes = attributesOf(node, spec.attrs);
+  return attributes && (node.type !== "panel" || "type" in attributes) ? container(spec.name, attributes, blocksToMdast(node.content)) : undefined;
+}
+
+/** Key and type are required, because the reader cannot make a macro without them. */
+function macroToMdast(node: AdfNode): ContainerDirective | LeafDirective | TextDirective | undefined {
+  const attributes = attributesOf(node, MACRO_ATTRS);
+  if (!attributes || !attributes.key || !attributes.type) return undefined;
+  if (node.type === "bodiedExtension") return container("macro", attributes, blocksToMdast(node.content));
+  if (node.content?.length) return undefined;
+  return { type: node.type === "extension" ? "leafDirective" : "textDirective", name: "macro", attributes, children: [] } as LeafDirective | TextDirective;
+}
+
+/** Alignment, indentation and breakout marks become attributes; a second mark of a type, or one with other attributes, stays in `marks`. */
+function blockMarkAttributes(marks: Mark[]): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const rest = marks.filter((mark) => {
+    const spec = BLOCK_MARKS[mark.type];
+    const own = spec && attributesOf({ type: mark.type, attrs: mark.attrs }, spec);
+    const free = own && Object.keys(own).length > 0 && Object.keys(own).every((key) => !(key in attributes));
+    if (free) Object.assign(attributes, own);
+    return !free;
+  });
+  if (rest.length > 0) attributes.marks = encodeJson(rest);
+  return attributes;
 }
 
 /** `alt` is the label; a border mark and, for a mediaSingle, its own attributes share the attribute list. */
@@ -408,6 +469,13 @@ function wrappersOf(node: AdfNode): { chain: Wrapper[]; code: boolean } {
   if (script) attributes[script.attrs!.type as string] = "";
   const background = take("backgroundColor", isColor);
   if (background) attributes.bg = encodeAmpersands(background.attrs!.color as string);
+  const isComment = (mark: Mark) =>
+    Object.keys(mark.attrs ?? {}).length === 2 && mark.attrs?.annotationType === "inlineComment" && isPlainText(mark.attrs.id) && /^[^,\s]+$/.test(mark.attrs.id);
+  const annotations = isText ? marks.filter((mark) => mark.type === "annotation") : [];
+  if (annotations.length > 0 && annotations.every(isComment)) {
+    attributes.annotation = encodeAmpersands(annotations.map((mark) => mark.attrs!.id).join(","));
+    marks.splice(0, marks.length, ...marks.filter((mark) => mark.type !== "annotation"));
+  }
   if (marks.length > 0) attributes.marks = encodeJson(marks);
   if (Object.keys(attributes).length > 0) {
     chain.push({ key: `span ${JSON.stringify(attributes)}`, make: (children) => ({ type: "textDirective", name: "span", attributes, children }) });
@@ -422,7 +490,7 @@ function leafToMdast(node: AdfNode, asDirective: boolean, code: boolean): Phrasi
   const url = attrsOf(node).url;
   if (node.type === "inlineCard" && Object.keys(attrsOf(node)).length === 1 && typeof url === "string" && AUTOLINK.test(url)) return raw(`<${url}>`);
   if (node.type === "hardBreak" && noAttrs(node) && !asDirective) return { type: "break" };
-  const dedicated = dedicatedToMdast(node);
+  const dedicated = node.type === "inlineExtension" ? macroToMdast(node) : dedicatedToMdast(node);
   if (dedicated) return dedicated as TextDirective;
   const attributes = directiveAttributes(node);
   const children = inlineToMdast(node.content ?? []);
@@ -623,12 +691,14 @@ function inlineFromMdast(nodes: PhrasingContent[], marks: Mark[], ctx: Context):
   return mergeText(out);
 }
 
-/** A span is `color`, `bg`, `underline`, `sub` and `sup` attributes, plus the generic `marks` JSON for every other mark. */
+/** A span is `color`, `bg`, `underline`, `sub`, `sup` and `annotation` (inline comment ids, comma separated) attributes, plus the generic `marks` JSON for every other mark. */
 function marksOfSpan(node: TextDirective): Mark[] | undefined {
-  const { color, bg, underline, sub, sup, marks, ...other } = node.attributes ?? {};
+  const { color, bg, underline, sub, sup, annotation, marks, ...other } = node.attributes ?? {};
   const generic = marks === undefined || marks === null ? [] : parseJson(marks);
-  if (Object.keys(other).length > 0 || !Array.isArray(generic)) return undefined;
-  const result: Mark[] = generic.filter((mark): mark is Mark => typeof mark?.type === "string");
+  const ids = annotation === undefined ? [] : (annotation ?? "").split(",");
+  if (Object.keys(other).length > 0 || !Array.isArray(generic) || ids.includes("")) return undefined;
+  const result: Mark[] = ids.map((id) => ({ type: "annotation", attrs: { annotationType: "inlineComment", id } }));
+  result.push(...generic.filter((mark): mark is Mark => typeof mark?.type === "string"));
   if (color) result.push({ type: "textColor", attrs: { color } });
   if (bg) result.push({ type: "backgroundColor", attrs: { color: bg } });
   if (underline !== undefined && underline !== null) result.push({ type: "underline" });
@@ -642,7 +712,7 @@ function inlineDirective(node: TextDirective, marks: Mark[], ctx: Context): AdfN
     const spanMarks = marksOfSpan(node);
     if (spanMarks) return inlineFromMdast(node.children, spanMarks.reduce(withMark, marks), ctx);
   } else {
-    const dedicated = dedicatedNode(node, ctx) ?? (node.name === "media" ? mediaFromDirective(node, "mediaInline", ctx) : undefined);
+    const dedicated = dedicatedNode(node, ctx) ?? (node.name === "media" ? mediaFromDirective(node, "mediaInline", ctx) : macroFromDirective(node, ctx));
     if (dedicated) return [{ ...dedicated, ...(marks.length > 0 ? { marks: [...(dedicated.marks ?? []), ...marks] } : {}) }];
     const spec = directiveSpec(node);
     if (spec) {
@@ -687,6 +757,15 @@ function paragraphFromMdast(node: Paragraph, ctx: Context): AdfNode[] {
   return out;
 }
 
+/** The inline content of a task or decision item; `:empty` stands for none. */
+function itemContent(item: ListItem, ctx: Context): AdfNode[] {
+  const [label] = item.children;
+  if (label?.type !== "paragraph") return [];
+  const [only] = label.children;
+  const empty = label.children.length === 1 && only.type === "textDirective" && only.name === "empty";
+  return empty ? [] : inlineFromMdast(label.children, [], ctx);
+}
+
 /** Task items hold inline content only, so a nested task list stays in the list and other blocks nested in an item end it and follow it. */
 function taskListFromMdast(items: ListItem[], ctx: Context): AdfNode[] {
   const out: AdfNode[] = [];
@@ -698,9 +777,7 @@ function taskListFromMdast(items: ListItem[], ctx: Context): AdfNode[] {
   for (const item of items) {
     const [first, ...rest] = item.children;
     const label = first?.type === "paragraph" ? first : undefined;
-    const [only] = label?.children ?? [];
-    const empty = label?.children.length === 1 && only.type === "textDirective" && only.name === "empty";
-    const content = label && !empty ? inlineFromMdast(label.children, [], ctx) : [];
+    const content = itemContent(item, ctx);
     tasks.push(finish({ type: "taskItem", attrs: { state: item.checked ? "DONE" : "TODO" }, content }, ctx));
     const [list] = rest;
     const nestedTasks = rest.length === 1 && list.type === "list" && list.children.every((child) => typeof child.checked === "boolean") ? taskListFromMdast(list.children, ctx) : [];
@@ -777,6 +854,8 @@ function decodeAttr(value: string | null | undefined, kind: Kind): unknown {
       return value === "" ? true : undefined;
     case "numbers":
       return numbers.every(Number.isFinite) ? numbers : undefined;
+    case "json":
+      return asObject(parseJson(value));
   }
 }
 
@@ -843,23 +922,59 @@ function mediaGroupDirective(node: ContainerDirective, ctx: Context): AdfNode | 
   return content.length > 0 && content.every(Boolean) ? { type: "mediaGroup", content: content as AdfNode[] } : undefined;
 }
 
-/** `panel`, `expand` and `nestedExpand` without `adf`; a panel needs its `type`. */
+/** `panel`, `expand`, `nestedExpand`, `layout` and `column` without `adf`; a panel needs its `type` and a layout holds columns. */
 function containerDirective(node: ContainerDirective, ctx: Context): AdfNode | undefined {
-  const spec = CONTAINER_ATTRS[node.name];
-  const attrs = spec && attrsFrom(node.attributes ?? {}, spec);
-  if (!attrs || (node.name === "panel" && attrs.panelType === undefined)) return undefined;
-  return { type: node.name, ...(Object.keys(attrs).length > 0 ? { attrs } : {}), content: blocksFromMdast(node.children, ctx) };
+  const spec = CONTAINERS.find((candidate) => candidate.name === node.name);
+  const attrs = spec && attrsFrom(node.attributes ?? {}, spec.attrs);
+  if (!spec || !attrs || (spec.type === "panel" && attrs.panelType === undefined)) return undefined;
+  const content = blocksFromMdast(node.children, ctx);
+  if (spec.type === "layoutSection" && !content.every((child) => child.type === "layoutColumn")) return undefined;
+  return { type: spec.type, ...(Object.keys(attrs).length > 0 ? { attrs } : {}), content };
+}
+
+/** `macro` without `adf`; the directive kind picks the node type, and a bodied macro holds blocks. */
+function macroFromDirective(node: Directive, ctx: Context): AdfNode | undefined {
+  const attrs = node.name === "macro" ? attrsFrom(node.attributes ?? {}, MACRO_ATTRS) : undefined;
+  if (!attrs || !attrs.extensionKey || !attrs.extensionType) return undefined;
+  if (node.type === "containerDirective") return { type: "bodiedExtension", attrs, content: blocksFromMdast(node.children, ctx) };
+  return node.children.length === 0 ? { type: MACRO_TYPES[node.type], attrs } : undefined;
+}
+
+/** `decisions` holds one bullet list of inline items. */
+function decisionsDirective(node: ContainerDirective, ctx: Context): AdfNode | undefined {
+  const [list, ...rest] = node.children;
+  const items = list?.type === "list" ? list.children : [];
+  if (node.name !== "decisions" || Object.keys(node.attributes ?? {}).length > 0 || rest.length > 0 || items.length === 0) return undefined;
+  if (!items.every((item) => typeof item.checked !== "boolean" && item.children.length === 1 && item.children[0].type === "paragraph")) return undefined;
+  const content = items.map((item) => finish({ type: "decisionItem", attrs: { state: "DECIDED" }, content: itemContent(item, ctx) }, ctx));
+  return finish({ type: "decisionList", content }, ctx);
+}
+
+/** The attributes of a `:::marks` wrapper, with the dedicated marks first; `adf` is the older spelling of `marks`. */
+function blockMarksOf(attributes: Record<string, string | null | undefined>): Mark[] | undefined {
+  const { marks, adf, ...rest } = attributes;
+  const generic = marks === undefined && adf === undefined ? [] : parseJson(marks ?? adf);
+  if (!Array.isArray(generic)) return undefined;
+  const result: Mark[] = [];
+  let used = 0;
+  for (const [type, spec] of Object.entries(BLOCK_MARKS)) {
+    const own = Object.fromEntries(Object.entries(rest).filter(([key]) => keysOf(spec).includes(key)));
+    const attrs = Object.keys(own).length > 0 ? attrsFrom(own, spec) : {};
+    if (!attrs) return undefined;
+    if (Object.keys(own).length > 0) result.push({ type, attrs });
+    used += Object.keys(own).length;
+  }
+  result.push(...generic);
+  return used === Object.keys(rest).length && result.length > 0 ? result : undefined;
 }
 
 function directiveBlock(node: LeafDirective | ContainerDirective, ctx: Context): AdfNode[] {
-  if (node.type === "containerDirective" && node.name === "marks") {
-    const marks = parseJson(node.attributes?.adf);
-    if (Array.isArray(marks)) return blocksFromMdast(node.children, ctx).map((child) => ({ ...child, marks: [...(child.marks ?? []), ...marks] }));
-  }
+  const marks = node.type === "containerDirective" && node.name === "marks" ? blockMarksOf(node.attributes ?? {}) : undefined;
+  if (marks) return blocksFromMdast(node.children, ctx).map((child) => ({ ...child, marks: [...(child.marks ?? []), ...marks] }));
   const known =
-    node.type === "containerDirective"
-      ? (tableDirective(node, ctx) ?? containerDirective(node, ctx) ?? mediaGroupDirective(node, ctx))
-      : node.name === "media" ? mediaFromDirective(node, "mediaSingle", ctx) : undefined;
+    (node.type === "containerDirective"
+      ? (tableDirective(node, ctx) ?? containerDirective(node, ctx) ?? mediaGroupDirective(node, ctx) ?? decisionsDirective(node, ctx))
+      : node.name === "media" ? mediaFromDirective(node, "mediaSingle", ctx) : undefined) ?? macroFromDirective(node, ctx);
   if (known) return [known];
   const dedicated = dedicatedNode(node, ctx);
   if (dedicated) return [dedicated];

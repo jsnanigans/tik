@@ -1,6 +1,6 @@
 import { type Credentials, makeAuthHeader } from "./credentials";
 import { localConfig } from "./config";
-import { adfToMarkdown } from "./markdown";
+import { adfToMarkdown, type AdfNode } from "./markdown";
 import { markdownToAdf } from "./adf-codec";
 
 const CONFLUENCE_BASE = `${localConfig.jiraBase}/wiki`;
@@ -73,25 +73,25 @@ export async function resolveSpaceKey(creds: Credentials, spaceId: string): Prom
   }
 }
 
-// Get a page by ID, including its ADF body
-export async function getConfluencePage(
+// Get a page by ID, with its ADF body next to the page (whose `body` is the display markdown)
+export async function getConfluencePageAdf(
   creds: Credentials,
-  pageId: string,
-  options: { preserveUnknown?: boolean } = {}
-): Promise<ConfluencePage> {
+  pageId: string
+): Promise<{ page: ConfluencePage; adf: AdfNode | null }> {
   const data = await confluenceRequest(creds, "GET", `/api/v2/pages/${pageId}?body-format=atlas_doc_format`);
   const adfString = data.body?.atlas_doc_format?.value;
+  let adf: AdfNode | null = null;
   let bodyMarkdown = "";
   if (adfString) {
     try {
-      const adfJson = JSON.parse(adfString);
-      bodyMarkdown = adfToMarkdown(adfJson, options);
+      adf = JSON.parse(adfString);
+      bodyMarkdown = adfToMarkdown(adf);
     } catch (err) {
       console.warn(`Warning: failed to parse ADF body for page ${pageId}:`, err);
     }
   }
 
-  return {
+  const page = {
     id: data.id,
     spaceId: data.spaceId,
     spaceKey: null,
@@ -101,6 +101,11 @@ export async function getConfluencePage(
     parentId: data.parentId || null,
     updated: data.version?.createdAt || data.createdAt || null,
   };
+  return { page, adf };
+}
+
+export async function getConfluencePage(creds: Credentials, pageId: string): Promise<ConfluencePage> {
+  return (await getConfluencePageAdf(creds, pageId)).page;
 }
 
 // Create a new page
@@ -144,18 +149,17 @@ export async function updateConfluencePage(
   pageId: string,
   params: {
     title: string;
-    markdown: string;
+    adf: AdfNode;
     currentVersion: number;
   }
 ): Promise<ConfluencePage> {
-  const adfJson = markdownToAdf(params.markdown);
   const payload = {
     id: pageId,
     status: "current",
     title: params.title,
     body: {
       representation: "atlas_doc_format",
-      value: JSON.stringify(adfJson),
+      value: JSON.stringify(params.adf),
     },
     version: {
       number: params.currentVersion + 1,
@@ -169,7 +173,7 @@ export async function updateConfluencePage(
     spaceId: data.spaceId,
     spaceKey: null,
     title: data.title,
-    body: adfToMarkdown(adfJson),
+    body: adfToMarkdown(params.adf),
     version: data.version?.number || 1,
     parentId: data.parentId || null,
     updated: data.version?.createdAt || data.createdAt || null,

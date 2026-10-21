@@ -128,20 +128,79 @@ const dialect: [string, AdfNode, string][] = [
     "generic node, mark and block mark",
     doc(
       { type: "futureBlock", attrs: { n: 2 }, content: [p(t("hi "), { type: "futureNode", attrs: { n: 1 } })] },
-      p(t("note", mark("annotation", { id: "x", annotationType: "inlineComment" }))),
-      { type: "paragraph", marks: [mark("alignment", { align: "center" })], content: [t("mid")] }
+      p(t("note", mark("futureMark", { n: 1 }))),
+      { type: "paragraph", marks: [mark("futureBlockMark", { n: 1 })], content: [t("mid")] }
     ),
     [
       ":::futureBlock{adf='{\"n\":2}'}",
       "hi :futureNode{adf='{\"n\":1}'}",
       ":::",
       "",
-      ":span[note]{marks='[{\"type\":\"annotation\",\"attrs\":{\"id\":\"x\",\"annotationType\":\"inlineComment\"}}]'}",
+      ":span[note]{marks='[{\"type\":\"futureMark\",\"attrs\":{\"n\":1}}]'}",
       "",
-      ":::marks{adf='[{\"type\":\"alignment\",\"attrs\":{\"align\":\"center\"}}]'}",
+      ":::marks{marks='[{\"type\":\"futureBlockMark\",\"attrs\":{\"n\":1}}]'}",
       "mid",
       ":::",
     ].join("\n"),
+  ],
+  [
+    "inline comments, also overlapping",
+    doc(p(t("a", mark("annotation", { annotationType: "inlineComment", id: "c-1" })), t("b", mark("annotation", { annotationType: "inlineComment", id: "c-1" }), mark("annotation", { annotationType: "inlineComment", id: "c-2" }), mark("strong")))),
+    ":span[a]{annotation=c-1}**:span[b]{annotation=c-1,c-2}**",
+  ],
+  [
+    "block marks",
+    doc(
+      { type: "paragraph", marks: [mark("alignment", { align: "center" }), mark("indentation", { level: 2 })], content: [t("a")] },
+      { type: "codeBlock", marks: [mark("breakout", { mode: "wide", width: 1800 }), mark("fragment", { localId: "f" })], content: [t("b")] }
+    ),
+    [
+      ":::marks{align=center indent=2}",
+      "a",
+      ":::",
+      "",
+      ":::marks{breakout=wide breakoutWidth=1800 marks='[{\"type\":\"fragment\",\"attrs\":{\"localId\":\"f\"}}]'}",
+      "```",
+      "b",
+      "```",
+      ":::",
+    ].join("\n"),
+  ],
+  [
+    "layout",
+    doc({
+      type: "layoutSection",
+      content: [
+        { type: "layoutColumn", attrs: { width: 33.33 }, content: [p(t("a"))] },
+        { type: "layoutColumn", attrs: { width: 66.67 }, content: [p(t("b"))] },
+      ],
+    }),
+    "::::layout\n:::column{width=33.33}\na\n:::\n\n:::column{width=66.67}\nb\n:::\n::::",
+  ],
+  [
+    "macros",
+    doc(
+      { type: "extension", attrs: { extensionType: "com.x", extensionKey: "toc", layout: "default", parameters: { macroParams: { style: { value: "it's" } } } } },
+      { type: "bodiedExtension", attrs: { extensionType: "com.x", extensionKey: "details" }, content: [p(t("in"))] },
+      p(t("see "), { type: "inlineExtension", attrs: { extensionType: "com.x", extensionKey: "anchor", text: "T" } })
+    ),
+    [
+      "::macro{type=com.x key=toc layout=default params='{\"macroParams\":{\"style\":{\"value\":\"it&#x27;s\"}}}'}",
+      "",
+      ":::macro{type=com.x key=details}",
+      "in",
+      ":::",
+      "",
+      "see :macro{type=com.x key=anchor text=T}",
+    ].join("\n"),
+  ],
+  [
+    "decisions",
+    doc({
+      type: "decisionList",
+      content: [{ type: "decisionItem", attrs: { state: "DECIDED" }, content: [t("ship", mark("strong"))] }, { type: "decisionItem", attrs: { state: "DECIDED" }, content: [] }],
+    }),
+    ":::decisions\n- **ship**\n- :empty\n:::",
   ],
   [
     "table with attributes and column widths",
@@ -226,7 +285,7 @@ describe.each(goldenFiles)("golden %s", (file) => {
 });
 
 describe("fuzz", () => {
-  const pieces = ["**", "_", "|", "- ", "1. ", "> ", "# ", "`", "```", "[", "](", "]", ":", ":::", "::", "{", "}", "\\", "\n", "\n\n", "  \n", "~~", "![", "<", "&", " ", "- [ ] ", "---", "a", ":x[", "adf='", ":::panel{type=info}", "::media[x]{_id=1 layout=center}", ":media{_id=1}", ":span[x]{sup}", ":::mediaGroup", "<http://x>", ":date[2026-01-01]", ":emoji[:a:]{_id=1}", "::card[http://x]{appearance=block}", ":span[a]{bg=#fff underline}", ":::table{numbered colwidths=1,x}", "::::row", ":::cell{header colspan=2}", "| a | b |\n| - | - |\n"];
+  const pieces = ["**", "_", "|", "- ", "1. ", "> ", "# ", "`", "```", "[", "](", "]", ":", ":::", "::", "{", "}", "\\", "\n", "\n\n", "  \n", "~~", "![", "<", "&", " ", "- [ ] ", "---", "a", ":x[", "adf='", ":::panel{type=info}", "::media[x]{_id=1 layout=center}", ":media{_id=1}", ":span[x]{sup}", ":::mediaGroup", "<http://x>", ":date[2026-01-01]", ":emoji[:a:]{_id=1}", "::card[http://x]{appearance=block}", ":span[a]{bg=#fff underline}", ":::table{numbered colwidths=1,x}", ":span[x]{annotation=a,}", ":::marks{align=center breakout}", "::::layout", ":::column{width=x}", "::macro{key=k type=t params='{}'}", ":::decisions", "::::row", ":::cell{header colspan=2}", "| a | b |\n| - | - |\n"];
   const inputs: string[] = pieces.flatMap((a) => pieces.map((b) => a + b));
   let seed = 7;
   const next = (n: number) => (seed = (seed * 48271) % 2147483647) % n;

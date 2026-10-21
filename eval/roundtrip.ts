@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import Ajv from "ajv";
-import { constructs, equivalent } from "../lib/adf-reconcile";
+import { constructs, equivalent, reconcile } from "../lib/adf-reconcile";
 import { customFields } from "../lib/config";
 import { adfToEditMarkdown, markdownToAdf } from "../lib/adf-codec";
 import type { AdfNode } from "../lib/markdown";
@@ -18,7 +18,7 @@ const TOP_DIFFS = 15;
 const CRASH_EXAMPLES = 5;
 
 type Field = { label: string; adf: AdfNode };
-type Outcome = { exact: boolean; readable: boolean; idempotent: boolean; valid: boolean; crash?: string; diffs: string[]; generic: string[] };
+type Outcome = { exact: boolean; readable: boolean; idempotent: boolean; valid: boolean; noOp: boolean; crash?: string; diffs: string[]; generic: string[] };
 
 const cacheDir = `${homedir()}/.cache/tik`;
 
@@ -55,7 +55,7 @@ function differingConstructs(original: AdfNode, result: AdfNode): string[] {
 }
 
 function roundTrip(adf: AdfNode): Outcome {
-  const outcome: Outcome = { exact: false, readable: false, idempotent: false, valid: false, diffs: [], generic: [] };
+  const outcome: Outcome = { exact: false, readable: false, idempotent: false, valid: false, noOp: false, diffs: [], generic: [] };
   try {
     const markdown = toMarkdown(adf);
     const once = toAdf(markdown);
@@ -64,6 +64,7 @@ function roundTrip(adf: AdfNode): Outcome {
     outcome.generic = genericUses(markdown);
     outcome.readable = outcome.exact && outcome.generic.length === 0;
     outcome.idempotent = equivalent(once, twice);
+    outcome.noOp = JSON.stringify(reconcile(adf, once).doc) === JSON.stringify(adf);
     outcome.valid = validate(once) as boolean;
     if (!outcome.exact) outcome.diffs = differingConstructs(adf, once);
   } catch (err) {
@@ -80,6 +81,7 @@ function evaluate(fields: Iterable<Field>) {
   let readable = 0;
   let idempotent = 0;
   let valid = 0;
+  let noOp = 0;
   let originalValid = 0;
   let skipped = 0;
   const crashes: { field: string; error: string }[] = [];
@@ -101,6 +103,7 @@ function evaluate(fields: Iterable<Field>) {
     if (outcome.readable) readable++;
     if (outcome.idempotent) idempotent++;
     if (outcome.valid) valid++;
+    if (outcome.noOp) noOp++;
     for (const [counts, names] of [[diffs, outcome.diffs], [generic, outcome.generic]] as const) {
       for (const name of names) {
         const entry = counts.get(name) ?? { fields: 0, example: label };
@@ -121,6 +124,7 @@ function evaluate(fields: Iterable<Field>) {
     readableRate: pct(readable, tested),
     idempotenceRate: pct(idempotent, tested),
     schemaValidRate: pct(valid, tested),
+    noOpIdentityRate: pct(noOp, tested),
     originalSchemaValidRate: pct(originalValid, tested),
     crashes: crashes.length,
     crashExamples: crashes.slice(0, CRASH_EXAMPLES),
@@ -146,7 +150,7 @@ for (const [name, fields] of Object.entries(sources)) {
   (report.sources as Record<string, unknown>)[name] = result;
   console.log(
     `${name}: ${result.tested} tested, exact ${result.exactRate}%, readable ${result.readableRate}%, ` +
-      `idempotent ${result.idempotenceRate}%, schema-valid ${result.schemaValidRate}% (originals ${result.originalSchemaValidRate}%), ` +
+      `idempotent ${result.idempotenceRate}%, schema-valid ${result.schemaValidRate}% (originals ${result.originalSchemaValidRate}%), no-op identity ${result.noOpIdentityRate}%, ` +
       `crashes ${result.crashes}, skipped ${result.skipped}`
   );
   for (const crash of result.crashExamples) console.log(`  crash ${crash.field}: ${crash.error}`);

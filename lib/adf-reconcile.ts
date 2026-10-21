@@ -106,7 +106,8 @@ export function lostConstructs(original: AdfNode, result: AdfNode): string[] {
 
 const CONTAINERS = new Set([
   "bulletList", "orderedList", "listItem", "blockquote", "panel", "expand", "nestedExpand", "table", "tableRow",
-  "tableCell", "tableHeader", "taskList", "decisionList", "layoutSection", "layoutColumn",
+  "tableCell", "tableHeader", "taskList", "decisionList", "layoutSection", "layoutColumn", "bodiedExtension", "multiBodiedExtension",
+  "extensionFrame",
 ]);
 
 function trailingEmpty(doc: AdfNode): number {

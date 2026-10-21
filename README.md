@@ -56,7 +56,7 @@ tik triage                   # fill missing type, sprint, points, team
 tik timeline PROJ-123
 ```
 
-Commands that take a ticket key fall back to the key in the current git branch name. `create` and `edit` only change what you pass and accept `--dry-run`. Editing a description, acceptance criteria or testing instructions on an existing ticket keeps the blocks you did not change; start from `tik view KEY --edit-md -d` and see AGENTS.md.
+Commands that take a ticket key fall back to the key in the current git branch name. `create` and `edit` only change what you pass and accept `--dry-run`. Editing a description, acceptance criteria or testing instructions on an existing ticket keeps the blocks you did not change; start from `tik view KEY --edit-md -d` and see AGENTS.md. `comment --edit ID` and `doc edit ID` work the same way (`--dry-run`, `--force`).
 
 Reads use the cache; add `-F` to sync first or run `tik sync`. `tik --help` lists every command and `tik <command> --help` its flags. [AGENTS.md](AGENTS.md) is the complete reference and is also printed by `tik --ai`.
 

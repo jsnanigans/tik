@@ -12,6 +12,7 @@
 - **Nothing is implicit**: `create` and `edit` only touch the fields you pass. Sprint, team, assignee and status are never defaulted.
 - **Dry runs**: `create` and `edit` accept `--dry-run` and print the computed fields without writing to Jira. For `-d`, `--ac`, `--ti` and `--replace` on an existing ticket, it reads the live field and prints a diff, the blocks that would change and the loss guard result.
 - **Editing existing rich text**: `edit -d/--ac/--ti` reads the live field, keeps every block you did not change as the original node, and sends nothing when nothing changed. Start from `tik view KEY --edit-md -d` (or `--ac`, `--ti`), which prints the exact markdown that `edit` reads back; the display markdown of `view -d` is lossy. The loss guard refuses the write when node types, marks or attributes of the original are missing from the result (`--force` overrides). Before writing, the previous ADF and its markdown are saved to `~/.cache/tik/backups/KEY/FIELD-TIMESTAMP.json`, and the write is refused if the ticket changed in Jira meanwhile.
+- **Editing comments and Confluence pages**: `comment KEY --edit ID` and `doc edit ID` use the same flow (reconcile with the live content, loss guard, backup, refusal if it changed meanwhile) and accept `--dry-run` and `--force`. `comment KEY --edit ID --edit-md` prints the comment as the exact markdown to edit and pass back with `-m FILE`; `doc edit` opens that markdown in `$EDITOR`. Backups of a page go to `~/.cache/tik/backups/confluence-ID/`, of a comment to `KEY/comment-ID-TIMESTAMP.json`.
 
 ## Reading
 
@@ -68,7 +69,7 @@ tik create "Summary" -p PROJ -t Task -d ./desc.md --ac "- criterion" --ti "1. st
   --priority 2 --points 3 -a -e --current-sprint -i
 tik edit PROJ-123 -s "New title" --add-label tech-debt
 tik edit PROJ-123 --sprint none --dry-run
-tik comment PROJ-123 "text"               # KEY is required with a message; -m FILE, --attach IMG, --edit ID, --rm ID,ID
+tik comment PROJ-123 "text"               # KEY is required with a message; -m FILE, --attach IMG, --edit ID [--edit-md] [--dry-run] [--force], --rm ID,ID
 tik start PROJ-123                        # -> In Progress
 tik review PROJ-123 --gate-ci             # -> review status; requires open, approved, green PR
 tik move PROJ-123 "Done"                  # also: tik transition KEY [STATUS] lists or applies
@@ -106,7 +107,7 @@ PRs are matched to tickets by the key in the branch name. Repos come from `githu
 | `tik embed [sync]` | Embedding stats; `sync` embeds all pending chunks (full backfill; first run downloads the ~325 MB model) |
 | `tik triage [-a]` | Interactive bulk fill of type, sprint, points, team |
 | `tik users` | List and edit the user directory |
-| `tik doc view\|create\|edit\|search\|sync` | Confluence pages (`search -O` queries Confluence directly) |
+| `tik doc view\|create\|edit\|search\|sync` | Confluence pages (`search -O` queries Confluence directly; `edit` takes `--dry-run` and `--force`) |
 
 ## Configuration
 

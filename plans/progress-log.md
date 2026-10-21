@@ -172,3 +172,30 @@ Readable rate after each step (Jira 17,985 fields, Confluence 300, comments 1,01
 - Jira readable 99.98%; generic uses: placeholder 3 (PROD-820). Exact, idempotent, schema-valid 100% on Jira; Confluence 100% / 100% / 92% (originals 92%); comments 100%; crashes 0; property checks all 100%. Confluence readable 33%.
 - The harness report is now `reports/roundtrip-<date>-<time>.json`, so a run no longer overwrites the phase 0 baseline.
 - `bun test`: 71 tests (1 new row for empty and nested tasks). `just check` passes.
+
+## Phase 6: comments and Confluence (2026-10-21)
+
+`just verify-roundtrip` runs in 21 s. Report: `reports/roundtrip-2026-10-21-phase6.json`. The harness now also reports no-op identity per source (render, parse, reconcile: byte-identical to the original).
+
+| Source | Fields | Exact | Idempotent | Schema-valid | No-op identity | Crashes | Readable (phase 5) | Readable (phase 6) |
+|---|---|---|---|---|---|---|---|---|
+| Jira cache | 17,985 | 100% | 100% | 100% | 100% | 0 | 99.98% | 99.98% |
+| Confluence sample | 300 | 100% | 100% | 92% (originals 92%) | 100% | 0 | 32.33% | 71.67% |
+| Comment sample | 1,016 | 100% | 100% | 100% | 100% | 0 | 100% | 100% |
+
+The phase 2 property checks are unchanged (all 100%).
+
+- Exit met: exact 100% on the Confluence and comment samples (>= 99.9%, no misses to name); comment no-op identity 100% (1,016/1,016).
+- Edit flow for comments: `comment KEY --edit ID` reads the live comment, reconciles, applies the loss guard (`--force`), saves a backup (`backups/KEY/comment-ID-TIMESTAMP.json`), re-checks `updated`, PUTs, reads back and warns. `--dry-run` prints the diff and guard result; it is refused without `--edit` or with `--attach` (an upload is a write). `--edit ID --edit-md` prints the comment's exact markdown (the plan does not name this flag; without it there is no exact starting point for a comment edit). Comment creation is unchanged.
+- `tik doc edit ID` now writes `adfToEditMarkdown` to the editor file, reconciles the result with the live ADF, and goes through the loss guard, backup (`backups/confluence-ID/body-TIMESTAMP.json`), a version re-check before the PUT, and a read-back warning. It takes `--dry-run` and `--force`. `getConfluencePageAdf` returns the raw ADF next to the page; `updateConfluencePage` takes an ADF. `doc create` still uses `markdownToAdf`; it has no original to guard or back up. `preserveUnknown` has no caller now; phase 7 deletes it.
+- Dedicated spellings, by sample frequency (fields in the Confluence sample; generic before, readable after):
+  - Annotation (inline comments, 34): `:span[x]{annotation=ID}`; overlapping comments are a comma list, `annotation=ID1,ID2`. It is written only when every annotation on the text is an inline comment with a plain id without commas or spaces, otherwise all stay in `marks`. Real samples have overlapping comments (9 fields).
+  - Layout (55): `::::layout` holding `:::column{width=33.33 valign=…}`.
+  - Extensions (72 extension, 64 bodiedExtension, 7 inlineExtension): `::macro{type=… key=… layout=… text=… params='{json}'}`, `:::macro{…}` with blocks for a bodiedExtension, `:macro{…}` inline. `type` and `key` are required, `params` is the parameters object as JSON.
+  - Block marks (alignment 23, indentation 9, breakout 48): `:::marks{align=center indent=2 breakout=wide breakoutWidth=1800}`; other marks stay in `marks='[…]'` of the same wrapper. The older `adf='[…]'` spelling is still read.
+  - decisionList (0 in the samples, named in the plan): `:::decisions` holding a bullet list, `- :empty` for an empty item; only `DECIDED` items use it. Covered by a dialect row and a 20,000-document scratch loop, not by the corpus.
+- Reconcile now recurses into `bodiedExtension`, `multiBodiedExtension` and `extensionFrame`, so editing a paragraph inside a Page Properties macro keeps the other children and their ids. Dry-run check on page 1402273794 (live read, nothing written): changing one phrase that occurs in annotated table cells shows only those paragraphs, annotations intact, guard quiet; a no-op is "No changes detected"; replacing the page with one line lists the lost constructs (heading, table, `mark:annotation`, `mark:breakout`, …).
+- Dry-run check on comment BACK-6383/65843 (table, heading, date, code): a no-op reports unchanged, a one-word edit gives one heading diff and a quiet guard, a one-line replacement lists the lost constructs, and without `--force` the write is refused. No backups directory was created.
+- Remaining generic uses in the Confluence sample, in fields, not in the plan's list for this phase: `placeholder` nodes 58 (template pages) and media with a caption 8 (placeholder form), blockCard with a `datasource` 7, taskItem with hard breaks 5, annotation on a non-text node (a status) 5 and the `fragment` and `fontSize` block marks 5 (the `marks` rows), multiBodiedExtension 1, bodiedSyncBlock 1. Jira: media with a `link` mark 3 (PROD-820).
+- Scratch check (not committed): 20,000 documents with hostile strings in every macro, block mark, annotation, layout and decision attribute and label all round-trip exactly. Two identical annotation marks on one text merge on read, as identical marks always did.
+- `bun test`: 77 tests (6 new dialect rows, 1 reconcile test; fuzz pieces extended). `just check` passes.

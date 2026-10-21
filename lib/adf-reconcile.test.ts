@@ -64,6 +64,21 @@ describe("reconcile in tables", () => {
   });
 });
 
+describe("reconcile in macros", () => {
+  const macro = doc({
+    type: "bodiedExtension",
+    attrs: { extensionType: "com.x", extensionKey: "details", localId: "m" },
+    content: [{ ...p(text("one")), attrs: { localId: "p1" } }, p(text("two"))],
+  });
+
+  test("editing inside a macro keeps the macro and its other children", () => {
+    const { doc: result } = reconcile(macro, markdownToAdf(adfToEditMarkdown(macro).replace("two", "2")));
+    expect(result.content![0].attrs).toBe(macro.content![0].attrs);
+    expect(result.content![0].content![0]).toBe(macro.content![0].content![0]);
+    expect(result.content![0].content![1]).toEqual(p(text("2")));
+  });
+});
+
 describe("lostConstructs", () => {
   test("names the panel when it is dropped, nothing when it is kept", () => {
     expect(lostConstructs(original, doc(p(text("one"))))).toContain("panel");
