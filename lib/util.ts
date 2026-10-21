@@ -178,3 +178,28 @@ export function formatElapsed(ms: number): string {
   const rem = secs % 60;
   return rem > 0 ? `${mins}m${rem}s` : `${mins}m`;
 }
+
+/** Line diff of two texts with `context` unchanged lines around each change; empty when they are equal. */
+export function unifiedDiff(before: string, after: string, context = 2): string {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  const common = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      common[i][j] = a[i] === b[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
+    }
+  }
+  const lines: string[] = [];
+  for (let i = 0, j = 0; i < a.length || j < b.length; ) {
+    if (i < a.length && j < b.length && a[i] === b[j]) lines.push(` ${a[i++]}`), j++;
+    else if (i < a.length && (j === b.length || common[i + 1][j] >= common[i][j + 1])) lines.push(`-${a[i++]}`);
+    else lines.push(`+${b[j++]}`);
+  }
+  const keep = lines.map((line, index) => line[0] !== " " || lines.slice(Math.max(0, index - context), index + context + 1).some((l) => l[0] !== " "));
+  const shown: string[] = [];
+  lines.forEach((line, index) => {
+    if (keep[index]) shown.push(line);
+    else if (shown[shown.length - 1] !== "...") shown.push("...");
+  });
+  return lines.every((line) => line[0] === " ") ? "" : shown.join("\n");
+}

@@ -34,7 +34,7 @@ Only the ADF codec has tests (`bun test`; `just verify-roundtrip` measures it on
   - `embeddings.ts`, `embed-sync.ts`: in-process EmbeddingGemma (transformers.js) embedder, issue chunking, and the pending-chunks pipeline.
   - `parser.ts`: raw Jira JSON to typed `IssueData`, `SprintData`, `CommentData`, `IssueLinkData`.
   - `adf-codec.ts`: lossless codec on mdast (`adfToEditMarkdown`, `parseMarkdown`, `markdownToAdf`). Native markdown plus directives (`:name[label]{adf='…'}`) for everything else.
-  - `adf-reconcile.ts`: `canonicalize` and `equivalent` for comparing ADF.
+  - `adf-reconcile.ts`: `canonicalize`, `equivalent`, `reconcile` (restores original nodes after an edit), `lostConstructs` (loss guard), `replaceInText` (`--replace`).
   - `markdown.ts`: ADF (display) and Jira wiki to markdown, `tikmedia:` image placeholders.
   - `history.ts`, `timeline.ts`, `export.ts`: changelog parsing, timeline graph, `tik export` renderer.
   - `confluence.ts`: Confluence pages API for `tik doc`.

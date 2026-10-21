@@ -63,3 +63,33 @@ Decisions and deliberate differences:
 - codeBlock attributes other than a plain language go in the info string as JSON (``` ```ts {"wrap":true} ```), not `{wrap=true}`; a hard break at the end of a block or in a heading is written `:hardBreak[]`.
 - Container directives with inline content (task items) use `:::taskItem{inline adf='…'}` with the text as the body, because a leaf label cannot hold a hard break.
 - A directive without `adf` attributes is only accepted for node types that can have none (`paragraph`, `tableRow`, …), so prose like `:status` stays text.
+
+## Phase 2: safe editing (2026-10-21)
+
+`just verify-roundtrip` runs in 21 s. Report: `reports/roundtrip-2026-10-21-phase2.json` (codec numbers unchanged from phase 1: exact 100% on Jira 17,985, Confluence 300 and comments 1,016; idempotent 100%; crashes 0; schema-valid 100% / 92% / 100%, the 92% being the originals' own rate). The harness now also runs the property checks on a sample of 500 fields (coverage-greedy over every construct, filled with an even spread, drawn from Jira, Confluence and comments):
+
+| Property | Passed |
+|---|---|
+| No-op identity (render, no edit, reconcile: byte-identical to the original) | 500/500 (100%) |
+| One sentence edited: only that block differs | 408/408 (100%) |
+| Loss guard quiet after that edit | 408/408 (100%) |
+| Block deleted: neighbours byte-identical | 224/224 (100%) |
+| Block inserted: neighbours byte-identical | 224/224 (100%) |
+| Guard fires when a table is dropped | 47/47 (100%) |
+| Guard fires when a panel is dropped | 17/17 (100%) |
+
+- Sanity check of the checks: with `reconcile` replaced by "return the edited document", no-op identity falls to 70.4% and the edit, delete and insert properties to 55-72%.
+- Delete and insert skip positions where removing a block would put two lists or quotes of the same type next to each other, which markdown merges into one.
+- Acceptance (dry-run only, live read of the seven tickets, nothing written): the phrase edits from `13 Ticket Orchestration.md` (stale FEWEB-2801 references) on PROD-1378 and BACK-6342 through `edit -d` on the `--edit-md` markdown, and on BACK-6343, 6347, 6379, 6380 and 6381 through `--replace`. Each result differs from the live description in exactly the blocks that hold an edited phrase (PROD-1378: block 5 of 19; BACK-6342: 4 and 7 of 38; BACK-6343: 5 and 21 of 25; BACK-6347: 6 of 9; BACK-6379: 4 of 16; BACK-6380: 7 of 25; BACK-6381: 7 of 21) and inside those only the one paragraph or list item changes; the loss guard is quiet on all. A no-op `edit -d` of the unedited `--edit-md` output reports "No changes" on PROD-1378 and BACK-6342.
+- Guard check on a live ticket: replacing BACK-6342's description with one line shows `Loss guard: would refuse without --force` listing heading, list, rule, table and mark types.
+- `bun test`: 57 tests (6 new for reconcile, loss guard and `replaceInText`). `just check` passes.
+- Pending for Brendan (not done by design): the supervised real edit on a throwaway ticket, checked in Jira's editor. The write path (backup, `updated` re-check, PUT, re-read warning) and the non-dry-run loss-guard refusal were therefore not exercised against Jira; the backup helper was run against a temporary HOME.
+
+Decisions:
+- `reconcile` aligns blocks with an LCS over canonical forms, recurses into same-type containers (lists, items, quotes, panels, expands, tables, rows, cells, task and decision lists, layouts) by position inside each changed gap, and keeps the original's trailing empty paragraphs. A paired node takes the original's `localId`.
+- The loss guard compares presence, not counts: it fires when a node type, mark type or attribute name occurs in the original and nowhere in the result. Dropping the only panel or table fires; dropping one of two does not (the dry-run diff shows it).
+- `--replace "old=>new"` splits on the first `=>`, searches description, AC and TI together and must match exactly once across them (the plan's "per field" is read as per rich-text field of the ticket, not a per-field flag); a match that spans text runs aborts. It cannot be combined with `-d`, `--ac` or `--ti`.
+- `view --edit-md` needs exactly one of `-d`, `--ac`, `--ti` and prints the live field with no header, so the output can be edited and passed back to `edit -d FILE`.
+- Dry-run does not abort on the guard; it reports it. A real write aborts unless `--force`.
+- Backups are `~/.cache/tik/backups/KEY/FIELD-TIMESTAMP.json` (`key`, `field`, `savedAt`, raw `adf`, edit `markdown`), written with exclusive create; a field without existing content has nothing to back up.
+- Flag docs (AGENTS.md, README.md, local skill) got the short version now, as CLAUDE.md requires; the full dialect reference stays in phase 7.

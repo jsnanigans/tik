@@ -1,9 +1,12 @@
 import { Database } from "bun:sqlite";
+import { mkdirSync, writeFileSync } from "fs";
 import { type IssueData, parseIssue } from "./parser";
 import { getSearchIndex, invalidateSearchIndex, withRelaxedFallback } from "./search";
 import { getCacheDir } from "./util";
 import { DIMENSIONS, chunkIssue, computeChunkHash, type IssueChunk } from "./embeddings";
 import { customFields, localConfig } from "./config";
+import { adfToEditMarkdown } from "./adf-codec";
+import type { AdfNode } from "./markdown";
 
 export type CachedIssue = {
   key: string;
@@ -2291,4 +2294,14 @@ export function cachePreview(key: string, repo: string, prNumber: number, urls: 
     INSERT OR REPLACE INTO preview_urls (key, repo, pr_number, pmp, userapp, cached_at)
     VALUES (?, ?, ?, ?, ?, datetime('now'))
   `).run(key, repo, prNumber, urls.pmp ?? null, urls.userapp ?? null);
+}
+
+/** Saves a rich-text field before it is replaced; throws when the backup cannot be written. */
+export function writeFieldBackup(key: string, field: string, adf: AdfNode): string {
+  const dir = `${getCacheDir()}/backups/${key}`;
+  mkdirSync(dir, { recursive: true });
+  const savedAt = new Date().toISOString();
+  const path = `${dir}/${field}-${savedAt.replace(/[:.]/g, "-")}.json`;
+  writeFileSync(path, JSON.stringify({ key, field, savedAt, adf, markdown: adfToEditMarkdown(adf) }, null, 2) + "\n", { flag: "wx" });
+  return path;
 }

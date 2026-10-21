@@ -2,10 +2,11 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import Ajv from "ajv";
-import { canonicalize, equivalent } from "../lib/adf-reconcile";
+import { constructs, equivalent } from "../lib/adf-reconcile";
 import { customFields } from "../lib/config";
 import { adfToEditMarkdown, markdownToAdf } from "../lib/adf-codec";
 import type { AdfNode } from "../lib/markdown";
+import { checkProperties } from "./properties";
 
 const toMarkdown = adfToEditMarkdown;
 const toAdf = markdownToAdf;
@@ -44,20 +45,6 @@ async function sampleFields(file: string, label: (item: any) => string): Promise
 const ajv = new Ajv({ schemaId: "auto", extendRefs: true });
 ajv.addMetaSchema(await Bun.file(require.resolve("ajv/lib/refs/json-schema-draft-04.json")).json());
 const validate = ajv.compile(await Bun.file(`${import.meta.dir}/adf-schema-full.json`).json());
-
-function constructs(adf: AdfNode): Map<string, number> {
-  const counts = new Map<string, number>();
-  const add = (key: string, n = 1) => counts.set(key, (counts.get(key) ?? 0) + n);
-  const walk = (node: AdfNode) => {
-    if (node.text !== undefined) add("text chars", node.text.length);
-    else add(node.type);
-    for (const name of Object.keys(node.attrs ?? {})) add(`${node.type}.${name}`);
-    for (const mark of node.marks ?? []) add(`mark:${mark.type}`);
-    node.content?.forEach(walk);
-  };
-  walk(canonicalize(adf));
-  return counts;
-}
 
 function differingConstructs(original: AdfNode, result: AdfNode): string[] {
   const before = constructs(original);
@@ -156,6 +143,14 @@ for (const [name, fields] of Object.entries(sources)) {
   );
   for (const crash of result.crashExamples) console.log(`  crash ${crash.field}: ${crash.error}`);
   for (const diff of result.topDiffs) console.log(`  ${String(diff.fields).padStart(6)}  ${diff.construct}  (${diff.example})`);
+}
+
+const sampleSources = [...jiraFields(), ...((await sampleFields("confluence.json", (page) => `confluence ${page.id}`)) ?? []), ...((await sampleFields("comments.json", (comment) => `${comment.key} comment ${comment.id}`)) ?? [])];
+const properties = checkProperties(sampleSources.filter((field) => field.adf?.type === "doc"));
+report.properties = properties;
+console.log(`properties (sample of ${properties.sampled}):`);
+for (const [name, { tested, passed, rate, failures }] of Object.entries(properties.checks)) {
+  console.log(`  ${name}: ${passed}/${tested} (${rate}%)${failures.length > 0 ? `  e.g. ${failures.join(", ")}` : ""}`);
 }
 
 report.seconds = Math.round((performance.now() - started) / 100) / 10;

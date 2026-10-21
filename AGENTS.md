@@ -10,7 +10,8 @@
 - **Short flags**: citty parses `-s` and `-S` as the same key, so no command defines both. Sprint scoping is always the long flag `--current-sprint`.
 - **Rich text** (`-d`, `--ac`, `--ti`, comments) takes markdown, converted to Jira's ADF. A value that looks like a path (contains `/`, starts with `./` or `~/`, ends in `.md`/`.txt`/`.markdown`) and exists is read as a file; quote literal text that could be mistaken for one.
 - **Nothing is implicit**: `create` and `edit` only touch the fields you pass. Sprint, team, assignee and status are never defaulted.
-- **Dry runs**: `create` and `edit` accept `--dry-run` and print the computed fields without calling Jira.
+- **Dry runs**: `create` and `edit` accept `--dry-run` and print the computed fields without writing to Jira. For `-d`, `--ac`, `--ti` and `--replace` on an existing ticket, it reads the live field and prints a diff, the blocks that would change and the loss guard result.
+- **Editing existing rich text**: `edit -d/--ac/--ti` reads the live field, keeps every block you did not change as the original node, and sends nothing when nothing changed. Start from `tik view KEY --edit-md -d` (or `--ac`, `--ti`), which prints the exact markdown that `edit` reads back; the display markdown of `view -d` is lossy. The loss guard refuses the write when node types, marks or attributes of the original are missing from the result (`--force` overrides). Before writing, the previous ADF and its markdown are saved to `~/.cache/tik/backups/KEY/FIELD-TIMESTAMP.json`, and the write is refused if the ticket changed in Jira meanwhile.
 
 ## Reading
 
@@ -19,7 +20,7 @@
 | `tik`, `tik sprint` | My tickets in the active sprint. `-a` all team, `-e` expand done, `-i` info only, `-g` goals, `--type`, `--grep`, `--team`, `--group-by team` |
 | `tik mine` | All my open tickets (`-e`, `--type`, `--grep`, `--team`, `--group-by team`) |
 | `tik prio` | P1/P2 tickets in the sprint |
-| `tik view [KEY]` | Details. `-d` description, `--ac`, `--ti`, `-A` all three |
+| `tik view [KEY]` | Details. `-d` description, `--ac`, `--ti`, `-A` all three; `--edit-md` with one of `-d`, `--ac`, `--ti` prints that live field as the exact markdown for `edit` |
 | `tik export [KEY]` | Full markdown copy fetched live: fields, links, attachments, description, AC, TI, comments, changelog |
 | `tik history [KEY]` | Changelog timeline |
 | `tik comments [KEY]` | Comments, bodies capped at 15 lines; `-f` full, `--md` raw markdown, `-n N` last N, `--author X`, `--no-bots`/`--bots`, `--json [--raw]` |
@@ -79,7 +80,7 @@ tik attach add|rm|embed ...
 
 `create` flags: `-p` project (default from config), `-t` type (default Task), `-d`, `-a` assign to me, `-e` your team, `--team NAME|ID` another team, `--current-sprint`, `--sprint ID`, `--priority`, `--points`, `--ac`, `--ti`, `-i` move to In Progress.
 
-`edit` flags: `-s`, `-d`, `-a me|none|ACCOUNT_ID`, `-p`/`--priority` (1-5 or name), `-e`, `--team NAME|ID`, `--current-sprint`, `--sprint ID|none`, `--points`, `--ac`, `--ti`, `--labels a,b`, `--add-label`, `--remove-label`, `--parent KEY|none`, `--status NAME|ID`. Invalid priority, sprint or points values abort the command.
+`edit` flags: `-s`, `-d`, `-a me|none|ACCOUNT_ID`, `-p`/`--priority` (1-5 or name), `-e`, `--team NAME|ID`, `--current-sprint`, `--sprint ID|none`, `--points`, `--ac`, `--ti`, `--labels a,b`, `--add-label`, `--remove-label`, `--parent KEY|none`, `--status NAME|ID`, `--replace "old=>new"` (repeatable; changes text inside one text run of the description, AC or TI, and aborts unless `old` matches exactly once and sits in a single run; not combinable with `-d`, `--ac`, `--ti`), `--force` (write despite the loss guard). Invalid priority, sprint or points values abort the command.
 
 Priority: 1 Highest, 2 High, 3 Medium, 4 Low, 5 Lowest.
 

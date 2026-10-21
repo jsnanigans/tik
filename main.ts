@@ -35,6 +35,15 @@ import {
   getObj,
   getStr,
   markdownToAdf,
+  parseMarkdown,
+  adfToEditMarkdown,
+  reconcile,
+  lostConstructs,
+  replaceInText,
+  equivalent,
+  writeFieldBackup,
+  unifiedDiff,
+  type AdfNode,
   jiraWikiToMarkdown,
   decodeMediaPlaceholder,
   makeMediaPlaceholder,
@@ -2983,6 +2992,99 @@ async function cmdBranch(creds: Credentials): Promise<void> {
   }
 }
 
+const RICH_TEXT_FIELDS = [
+  { name: "description", label: "description" },
+  { name: "acceptanceCriteria", label: "acceptance criteria" },
+  { name: "testingInstructions", label: "testing instructions" },
+] as const;
+type RichTextName = (typeof RICH_TEXT_FIELDS)[number]["name"];
+
+const richTextFieldId = (name: RichTextName): string => (name === "description" ? name : customFields[name]);
+
+type RichTextPlan = {
+  name: RichTextName;
+  label: string;
+  id: string;
+  original: AdfNode | null;
+  result: AdfNode;
+  unchanged: boolean;
+  changes: string[];
+  lost: string[];
+  warnings: string[];
+  diff: string;
+};
+
+async function fetchRichText(creds: Credentials, key: string, names: RichTextName[]) {
+  const ids = names.map(richTextFieldId).filter(Boolean);
+  const issue = (await jiraGet(creds, `/rest/api/3/issue/${key}?fields=${[...ids, "updated"].join(",")}`)) as {
+    fields?: Record<string, unknown>;
+  };
+  const doc = (name: RichTextName): AdfNode | null => {
+    const value = issue.fields?.[richTextFieldId(name)] as AdfNode | null | undefined;
+    return value?.type === "doc" && value.content?.length ? value : null;
+  };
+  return { updated: String(issue.fields?.updated ?? ""), doc };
+}
+
+function applyReplacements(originals: Map<RichTextName, AdfNode>, specs: string[]): Map<RichTextName, AdfNode> {
+  const docs = new Map(originals);
+  for (const spec of specs) {
+    const at = spec.indexOf("=>");
+    if (at <= 0) emitError("invalid_replace", `Invalid --replace '${spec}' (use "old=>new")`);
+    const [search, replacement] = [spec.slice(0, at), spec.slice(at + 2)];
+    const found = [...docs].map(([name, doc]) => ({ name, ...replaceInText(doc, search, replacement) }));
+    const count = found.reduce((sum, f) => sum + f.count, 0);
+    const where = found.filter((f) => f.count > 0).map((f) => f.name).join(", ");
+    if (found.some((f) => f.crossing > 0)) emitError("replace_split", `'${search}' also spans several text runs (marks), which --replace does not edit`);
+    if (count === 0) emitError("replace_not_found", `'${search}' not found in any text run`);
+    if (count > 1) emitError("replace_ambiguous", `'${search}' found ${count} times (${where}); make it unique`);
+    for (const f of found) docs.set(f.name, f.doc);
+  }
+  return docs;
+}
+
+async function planRichTextEdits(
+  creds: Credentials,
+  key: string,
+  inputs: Partial<Record<RichTextName, string>>,
+  replacements: string[]
+): Promise<{ plans: RichTextPlan[]; updated: string }> {
+  const fields = RICH_TEXT_FIELDS.filter(({ name }) => (replacements.length > 0 ? richTextFieldId(name) : inputs[name] !== undefined));
+  const live = await fetchRichText(creds, key, fields.map((f) => f.name));
+  const originals = new Map(fields.flatMap(({ name }) => (live.doc(name) ? [[name, live.doc(name)!] as const] : [])));
+  const replaced = replacements.length > 0 ? applyReplacements(originals, replacements) : undefined;
+
+  const plans: RichTextPlan[] = [];
+  for (const { name, label } of fields) {
+    const original = live.doc(name);
+    if (replaced && !original) continue;
+    const warnings: string[] = [];
+    let edited: AdfNode;
+    if (replaced) {
+      edited = replaced.get(name)!;
+    } else {
+      const parsed = parseMarkdown(await readFileArg(inputs[name]!));
+      edited = parsed.doc;
+      warnings.push(...parsed.warnings.map((w) => `${label}: ${w}`));
+    }
+    const { doc: result, changes } = original ? reconcile(original, edited) : { doc: edited, changes: ["new content"] };
+    const unchanged = original !== null && equivalent(original, result);
+    plans.push({
+      name,
+      label,
+      id: richTextFieldId(name),
+      original,
+      result,
+      unchanged,
+      changes,
+      lost: original ? lostConstructs(original, result) : [],
+      warnings,
+      diff: unifiedDiff(adfToEditMarkdown(original), adfToEditMarkdown(result)),
+    });
+  }
+  return { plans, updated: live.updated };
+}
+
 async function cmdEdit(creds: Credentials, key: string, options: {
   summary?: string;
   description?: string;
@@ -2999,6 +3101,8 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   addLabel?: string;
   removeLabel?: string;
   status?: string;
+  replace?: string[];
+  force?: boolean;
   dryRun?: boolean;
 }): Promise<void> {
   const fields: Record<string, unknown> = {};
@@ -3009,13 +3113,6 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     const summary = await readFileArg(options.summary);
     fields.summary = summary.trim().split("\n")[0];
     changes.push(`summary → "${truncate(summary, 40)}"`);
-  }
-
-  if (options.description) {
-    const description = await readFileArg(options.description);
-    fields.description = markdownToAdf(description);
-    const isFile = description !== options.description;
-    changes.push(isFile ? `description → from ${options.description}` : `description → "${truncate(description, 30)}"`);
   }
 
   if (options.assignee) {
@@ -3089,19 +3186,35 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     changes.push(`points → ${pts}`);
   }
 
+  const richTextInputs: Partial<Record<RichTextName, string>> = {};
+  if (options.description) richTextInputs.description = options.description;
   if (options.acceptanceCriteria) {
-    const ac = await readFileArg(options.acceptanceCriteria);
-    fields[requireCustomField("acceptanceCriteria")] = markdownToAdf(ac);
-    const isFile = ac !== options.acceptanceCriteria;
-    changes.push(isFile ? `acceptance criteria → from ${options.acceptanceCriteria}` : `acceptance criteria → "${truncate(ac, 30)}"`);
+    requireCustomField("acceptanceCriteria");
+    richTextInputs.acceptanceCriteria = options.acceptanceCriteria;
+  }
+  if (options.testingInstructions) {
+    requireCustomField("testingInstructions");
+    richTextInputs.testingInstructions = options.testingInstructions;
+  }
+  const replacements = options.replace ?? [];
+  if (replacements.length > 0 && Object.keys(richTextInputs).length > 0) {
+    emitError("replace_conflict", "--replace cannot be combined with -d, --ac or --ti");
   }
 
-  if (options.testingInstructions) {
-    const ti = await readFileArg(options.testingInstructions);
-    fields[requireCustomField("testingInstructions")] = markdownToAdf(ti);
-    const isFile = ti !== options.testingInstructions;
-    changes.push(isFile ? `testing instructions → from ${options.testingInstructions}` : `testing instructions → "${truncate(ti, 30)}"`);
+  let plans: RichTextPlan[] = [];
+  let liveUpdated = "";
+  if (replacements.length > 0 || Object.keys(richTextInputs).length > 0) {
+    if (globalFormat === "table") showLoading(`Reading ${key}...`);
+    ({ plans, updated: liveUpdated } = await planRichTextEdits(creds, key, richTextInputs, replacements));
+    if (globalFormat === "table") clearLoading();
   }
+  const warnings = plans.flatMap((plan) => plan.warnings);
+  const changedPlans = plans.filter((plan) => !plan.unchanged);
+  for (const plan of changedPlans) {
+    fields[plan.id] = plan.result;
+    changes.push(`${plan.label} → ${plan.original ? `${plan.changes.length} block change(s)` : "new content"}`);
+  }
+  const lossBlocked = changedPlans.filter((plan) => plan.lost.length > 0 && !options.force);
 
   if (options.labels) {
     const labelList = options.labels.split(",").map(l => l.trim()).filter(Boolean);
@@ -3123,12 +3236,18 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   }
   if (labelOps.length > 0) update.labels = labelOps;
 
+  if (Object.keys(fields).length === 0 && Object.keys(update).length === 0 && !options.status && plans.length > 0) {
+    if (globalFormat === "json") out(JSON.stringify({ key, changes: [], unchanged: plans.map((plan) => plan.name), warnings }, null, 2));
+    else out(`${C.green}✓${C.reset} No changes to ${formatProjectKey(key)}`);
+    return;
+  }
+
   if (Object.keys(fields).length === 0 && Object.keys(update).length === 0 && !options.status) {
     out(`${C.yellow}No changes specified${C.reset}`);
     out();
     out(`Usage: tik edit <KEY> [options]`);
     out(`  -s, --summary     New summary/title (or path to file)`);
-    out(`  -d, --desc        New description (or path to .md file)`);
+    out(`  -d, --desc        Description markdown (or path to .md file); replaces the field, unchanged blocks stay as they are`);
     out(`  -a, --assignee    Assignee (accountId, "me", or "none")`);
     out(`  --parent          Parent ticket key, or "none" to remove`);
     out(`  -p, --priority    Priority (1-5 or name)`);
@@ -3137,8 +3256,10 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     out(`  --current-sprint  Add to current sprint`);
     out(`  --sprint <id>     Add to specific sprint, or "none" to remove`);
     out(`  --points          Story points`);
-    out(`  --ac              Acceptance criteria (or path to .md file)`);
-    out(`  --ti              Testing instructions (or path to .md file)`);
+    out(`  --ac              Acceptance criteria markdown (or path to .md file)`);
+    out(`  --ti              Testing instructions markdown (or path to .md file)`);
+    out(`  --replace         Replace text inside one text run, "old=>new" (repeatable)`);
+    out(`  --force           Write even when the loss guard reports lost constructs`);
     out(`  --labels          Set labels (comma-separated)`);
     out(`  --add-label       Add a label`);
     out(`  --remove-label    Remove a label`);
@@ -3171,7 +3292,8 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   }
 
   if (options.dryRun) {
-    const payload = { dryRun: true, action: "edit", fields, update, changes, transition: foundTransition ?? null };
+    const richText = plans.map(({ name, unchanged, changes, lost, diff }) => ({ field: name, unchanged, changes, lost, diff }));
+    const payload = { dryRun: true, action: "edit", fields, update, changes, richText, warnings, transition: foundTransition ?? null };
     if (globalFormat === "json") {
       out(JSON.stringify(payload, null, 2));
       return;
@@ -3179,7 +3301,36 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     out(`${C.yellow}Dry run — would apply:${C.reset}`);
     for (const c of changes) out(`  ${c}`);
     if (foundTransition) out(`  ${C.dim}Transition to:${C.reset} ${foundTransition.name}`);
+    for (const plan of plans) {
+      out();
+      if (plan.unchanged) {
+        out(`${C.bold}${plan.label}${C.reset} ${C.dim}unchanged, nothing would be sent${C.reset}`);
+        continue;
+      }
+      out(`${C.bold}${plan.label}${C.reset}`);
+      for (const change of plan.changes) out(`  ${C.dim}block ${change}${C.reset}`);
+      out(plan.diff.split("\n").map((line) => `  ${line}`).join("\n"));
+      if (plan.lost.length === 0) out(`  ${C.dim}Loss guard: nothing lost${C.reset}`);
+      else out(`  ${C.yellow}Loss guard: would refuse without --force; missing from the result: ${plan.lost.join(", ")}${C.reset}`);
+    }
+    for (const warning of warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
     return;
+  }
+
+  if (lossBlocked.length > 0) {
+    emitError("loss_guard", `Refusing to write: ${lossBlocked.map((plan) => `${plan.label} would lose ${plan.lost.join(", ")}`).join("; ")}. Use --force to write anyway, or edit from 'tik view ${key} --edit-md'.`, {
+      lost: Object.fromEntries(lossBlocked.map((plan) => [plan.name, plan.lost])),
+    });
+  }
+
+  if (changedPlans.length > 0) {
+    try {
+      for (const plan of changedPlans) if (plan.original) writeFieldBackup(key, plan.name, plan.original);
+    } catch (err) {
+      emitError("backup_failed", `Could not write the backup, nothing was changed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const current = await fetchRichText(creds, key, []);
+    if (current.updated !== liveUpdated) emitError("changed_in_jira", `${key} was updated in Jira while editing; run the command again`);
   }
 
   if (hasFieldChanges) {
@@ -3215,14 +3366,23 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     changes.push(`status → ${foundTransition.name}`);
   }
 
+  if (changedPlans.length > 0) {
+    const stored = await fetchRichText(creds, key, changedPlans.map((plan) => plan.name));
+    for (const plan of changedPlans) {
+      const saved = stored.doc(plan.name);
+      if (!saved || !equivalent(saved, plan.result)) warnings.push(`${plan.label}: Jira stored a different version than was sent`);
+    }
+  }
+
   if (globalFormat === "json") {
-    out(JSON.stringify({ key, changes }, null, 2));
+    out(JSON.stringify({ key, changes, ...(warnings.length > 0 ? { warnings } : {}) }, null, 2));
     return;
   }
   out(`${C.green}✓${C.reset} Updated ${formatProjectKey(key)}`);
   for (const change of changes) {
     out(`  ${C.dim}${change}${C.reset}`);
   }
+  for (const warning of warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
 }
 
 async function cmdTransition(creds: Credentials, args: string[]): Promise<void> {
@@ -3952,11 +4112,22 @@ const main = defineCommand({
         ac: { type: "boolean", description: "Show acceptance criteria" },
         ti: { type: "boolean", description: "Show testing instructions" },
         A: { type: "boolean", alias: "all", description: "Show description, AC, and TI" },
+        "edit-md": { type: "boolean", description: "Print the live -d, --ac or --ti as the exact markdown that edit reads back" },
       },
       run: async ({ args }) => {
         subCommandExecuted = true;
         applyFormat(args);
         const creds = await getCredentials(args);
+
+        if (args["edit-md"]) {
+          const requested = { description: args.d, acceptanceCriteria: args.ac, testingInstructions: args.ti };
+          const names = RICH_TEXT_FIELDS.map((f) => f.name).filter((name) => requested[name]);
+          if (names.length !== 1) emitError("edit_md_field", "--edit-md needs exactly one of -d, --ac or --ti");
+          const key = await requireTicket(typeof args.key === "string" ? [args.key] : []);
+          const markdown = adfToEditMarkdown((await fetchRichText(creds, key, names)).doc(names[0]));
+          out(globalFormat === "json" ? JSON.stringify({ key, field: names[0], markdown }, null, 2) : markdown);
+          return;
+        }
 
         const showAll = !!args.A;
         const opts: FormatIssueOpts = {
@@ -5021,7 +5192,7 @@ const main = defineCommand({
       args: {
         key: { type: "positional", required: false, description: "Ticket key (or from branch)" },
         s: { type: "string", alias: "summary", description: "New summary/title (or path to file)" },
-        d: { type: "string", alias: "desc", description: "New description with markdown (or path to .md file)" },
+        d: { type: "string", alias: "desc", description: "Description markdown (or path to .md file); replaces the field, unchanged blocks stay as they are" },
         a: { type: "string", alias: "assignee", description: 'Assignee (accountId, "me", or "none")' },
         p: { type: "string", alias: "priority", description: "Priority (1-5 or name)" },
         e: { type: "boolean", description: "Assign to your team (myTeamId)" },
@@ -5029,8 +5200,10 @@ const main = defineCommand({
         "current-sprint": { type: "boolean", description: "Add to current sprint" },
         sprint: { type: "string", description: 'Sprint ID, or "none" to remove' },
         points: { type: "string", description: "Story points" },
-        ac: { type: "string", description: "Acceptance criteria with markdown (or path to .md file)" },
-        ti: { type: "string", description: "Testing instructions with markdown (or path to .md file)" },
+        ac: { type: "string", description: "Acceptance criteria markdown (or path to .md file); replaces the field, unchanged blocks stay as they are" },
+        ti: { type: "string", description: "Testing instructions markdown (or path to .md file); replaces the field, unchanged blocks stay as they are" },
+        replace: { type: "string", description: 'Replace text inside one text run, "old=>new" (repeatable; must match exactly once in description, AC and TI)' },
+        force: { type: "boolean", description: "Write even when the loss guard reports constructs missing from the result" },
         labels: { type: "string", description: "Set labels (comma-separated)" },
         "add-label": { type: "string", description: "Add a label" },
         "remove-label": { type: "string", description: "Remove a label" },
@@ -5062,6 +5235,8 @@ const main = defineCommand({
           addLabel: typeof args["add-label"] === "string" ? args["add-label"] : undefined,
           removeLabel: typeof args["remove-label"] === "string" ? args["remove-label"] : undefined,
           status: typeof args.status === "string" ? args.status : undefined,
+          replace: [args.replace].flat().filter((r): r is string => typeof r === "string"),
+          force: !!args.force,
           dryRun: !!args["dry-run"],
         });
       },

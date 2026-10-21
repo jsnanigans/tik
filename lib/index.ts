@@ -31,12 +31,14 @@ export {
 } from "./parser";
 export { type AdfNode, adfToMarkdown, jiraWikiToMarkdown, decodeMediaPlaceholder, makeMediaPlaceholder } from "./markdown";
 export { markdownToAdf, adfToEditMarkdown, parseMarkdown } from "./adf-codec";
+export { reconcile, lostConstructs, replaceInText, equivalent } from "./adf-reconcile";
 export {
   type CommandResult,
   runCommand,
   runCommandResult,
   getCacheDir,
   readFileArg,
+  unifiedDiff,
   ticketFromBranch,
   ensureInsideGitRepo,
   getCurrentBranch,
@@ -87,6 +89,7 @@ export {
   cacheSingleIssue,
   cacheUserMapping,
   getUserAccountId,
+  writeFieldBackup,
   searchCache,
   getCachedKeys,
   getCachedIssue,
