@@ -51,7 +51,7 @@ export async function readFileArg(value: string): Promise<string> {
       ? value.replace("~", process.env.HOME || "")
       : value;
     const file = Bun.file(filePath);
-    if (await file.exists()) {
+    if (await file.exists().catch(() => false)) {
       return await file.text();
     }
   }

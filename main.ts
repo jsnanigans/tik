@@ -42,6 +42,7 @@ import {
   replaceInText,
   equivalent,
   writeFieldBackup,
+  findFieldBackup,
   unifiedDiff,
   type AdfNode,
   jiraWikiToMarkdown,
@@ -3138,6 +3139,7 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   replace?: string[];
   force?: boolean;
   dryRun?: boolean;
+  showDiff?: boolean;
 }): Promise<void> {
   const fields: Record<string, unknown> = {};
   const changes: string[] = [];
@@ -3343,6 +3345,7 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     return;
   }
 
+  if (options.showDiff && globalFormat === "table") for (const plan of changedPlans) printRichTextPlan(plan);
   refuseLoss(lossBlocked, `edit from 'tik view ${key} --edit-md'`);
 
   if (changedPlans.length > 0) {
@@ -3410,7 +3413,7 @@ async function fetchComment(creds: Credentials, key: string, id: string) {
 }
 
 /** The same flow as a rich-text field of a ticket: reconcile with the live comment, guard, back up, check it did not change, write, read back. */
-async function cmdEditComment(creds: Credentials, key: string, id: string, markdown: string, options: { force?: boolean; dryRun?: boolean }): Promise<void> {
+async function cmdEditComment(creds: Credentials, key: string, id: string, markdown: string, options: { force?: boolean; dryRun?: boolean; showDiff?: boolean }): Promise<void> {
   if (globalFormat === "table") showLoading(`Reading comment ${id}...`);
   const live = await fetchComment(creds, key, id);
   if (globalFormat === "table") clearLoading();
@@ -3434,6 +3437,7 @@ async function cmdEditComment(creds: Credentials, key: string, id: string, markd
     else out(`${C.green}✓${C.reset} No changes to comment ${id} on ${formatProjectKey(key)}`);
     return;
   }
+  if (options.showDiff && globalFormat === "table") printRichTextPlan(plan);
   if (!options.force) refuseLoss(plan.lost.length > 0 ? [plan] : [], `edit from 'tik comment ${key} --edit ${id} --edit-md'`);
   backupOrAbort(key, `comment-${id}`, plan.original);
   if ((await fetchComment(creds, key, id)).updated !== live.updated) emitError("changed_in_jira", `Comment ${id} was updated in Jira while editing; run the command again`);
@@ -3449,6 +3453,23 @@ async function cmdEditComment(creds: Credentials, key: string, id: string, markd
   }
   out(`${C.green}✓${C.reset} Updated comment ${id} on ${formatProjectKey(key)}`);
   for (const warning of warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
+}
+
+/** Writes a backup back through the edit flow of its field, printing the diff first. */
+async function cmdRestore(creds: Credentials, key: string, options: { field?: string; at?: string; force?: boolean; dryRun?: boolean }): Promise<void> {
+  let backup: ReturnType<typeof findFieldBackup>;
+  try {
+    backup = findFieldBackup(key, options.field, options.at);
+  } catch (err) {
+    emitError("no_backup", err instanceof Error ? err.message : String(err));
+  }
+  const markdown = adfToEditMarkdown(backup.adf);
+  const flow = { force: options.force, dryRun: options.dryRun, showDiff: true };
+  if (globalFormat === "table") out(`${C.dim}Restoring ${backup.field} of ${key} from ${backup.path}${C.reset}`);
+  const commentId = backup.field.match(/^comment-(.+)$/)?.[1];
+  if (commentId) await cmdEditComment(creds, key, commentId, markdown, flow);
+  else if (RICH_TEXT_FIELDS.some((f) => f.name === backup.field)) await cmdEdit(creds, key, { [backup.field]: markdown, ...flow });
+  else emitError("restore_unsupported", `Cannot restore ${backup.field} (${backup.path}); copy its markdown into an edit by hand`);
 }
 
 async function cmdTransition(creds: Credentials, args: string[]): Promise<void> {
@@ -5307,6 +5328,28 @@ const main = defineCommand({
           removeLabel: typeof args["remove-label"] === "string" ? args["remove-label"] : undefined,
           status: typeof args.status === "string" ? args.status : undefined,
           replace: [args.replace].flat().filter((r): r is string => typeof r === "string"),
+          force: !!args.force,
+          dryRun: !!args["dry-run"],
+        });
+      },
+    }),
+    restore: defineCommand({
+      meta: { description: "Write a saved backup of a description, AC, TI or comment back to a ticket" },
+      args: {
+        key: { type: "positional", required: false, description: "Ticket key (or from branch)" },
+        field: { type: "string", description: "description, acceptanceCriteria, testingInstructions or comment-<id> (default: the newest backup of any field)" },
+        at: { type: "string", description: "Timestamp or prefix of the backup's file name (default: the newest)" },
+        force: { type: "boolean", description: "Write even when the loss guard reports constructs missing from the result" },
+        "dry-run": { type: "boolean", description: "Print the diff and the loss guard result without writing" },
+      },
+      run: async ({ args }) => {
+        subCommandExecuted = true;
+        applyFormat(args);
+        const creds = await getCredentials(args);
+        const key = await requireTicket(typeof args.key === "string" ? [args.key] : []);
+        await cmdRestore(creds, key, {
+          field: typeof args.field === "string" ? args.field : undefined,
+          at: typeof args.at === "string" ? args.at : undefined,
           force: !!args.force,
           dryRun: !!args["dry-run"],
         });

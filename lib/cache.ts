@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { type IssueData, parseIssue } from "./parser";
 import { getSearchIndex, invalidateSearchIndex, withRelaxedFallback } from "./search";
 import { getCacheDir } from "./util";
@@ -2304,4 +2304,20 @@ export function writeFieldBackup(key: string, field: string, adf: AdfNode): stri
   const path = `${dir}/${field}-${savedAt.replace(/[:.]/g, "-")}.json`;
   writeFileSync(path, JSON.stringify({ key, field, savedAt, adf, markdown: adfToEditMarkdown(adf) }, null, 2) + "\n", { flag: "wx" });
   return path;
+}
+
+export type FieldBackup = { key: string; field: string; savedAt: string; adf: AdfNode; markdown: string; path: string };
+
+/** The newest backup of a ticket, optionally of one field, and only among those whose timestamp starts with `at`. */
+export function findFieldBackup(key: string, field?: string, at?: string): FieldBackup {
+  const dir = `${getCacheDir()}/backups/${key}`;
+  const stamp = at?.replace(/[:.]/g, "-") ?? "";
+  const matches = (existsSync(dir) ? readdirSync(dir) : [])
+    .map((name) => ({ name, match: name.match(/^(.+)-(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.json$/) }))
+    .filter(({ match }) => match && (!field || match[1] === field) && match[2].startsWith(stamp))
+    .sort((a, b) => a.match![2].localeCompare(b.match![2]));
+  const newest = matches.at(-1);
+  if (!newest) throw new Error(`No backup of ${key}${field ? ` field ${field}` : ""}${at ? ` at ${at}` : ""} in ${dir}`);
+  const path = `${dir}/${newest.name}`;
+  return { ...JSON.parse(readFileSync(path, "utf8")), path };
 }

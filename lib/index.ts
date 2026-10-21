@@ -90,6 +90,7 @@ export {
   cacheUserMapping,
   getUserAccountId,
   writeFieldBackup,
+  findFieldBackup,
   searchCache,
   getCachedKeys,
   getCachedIssue,

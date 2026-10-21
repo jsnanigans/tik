@@ -6,7 +6,7 @@ export type AdfNode = {
   attrs?: Record<string, unknown>;
 };
 
-// ADF nodes markdown cannot express round-trip as base64 image placeholders (`tikmedia:`/`tikadf:`).
+// Media round-trips through the display writer as base64 `tikmedia:` image placeholders.
 const MEDIA_TYPES = new Set(["mediaSingle", "mediaGroup", "media", "mediaInline"]);
 
 function readableText(node: AdfNode): string {
@@ -30,36 +30,15 @@ function readableText(node: AdfNode): string {
 }
 
 function placeholderLabel(node: AdfNode): string {
-  const attrs = node.attrs ?? {};
-  switch (node.type) {
-    case "mediaGroup":
-      return "image: " + (node.content ?? []).map((c) => (c.attrs?.alt as string) || "file").join(", ");
-    case "mediaSingle":
-    case "media":
-    case "mediaInline": {
-      const media = node.content?.find((c) => c.type === "media") ?? node;
-      return "image: " + ((media.attrs?.alt as string) || "image");
-    }
-    case "status":
-    case "date":
-      return `${node.type}: ${readableText(node)}`;
-    case "extension":
-    case "bodiedExtension":
-    case "inlineExtension":
-      return `macro: ${attrs.extensionKey}`;
-    case "expand":
-    case "nestedExpand":
-      return `expand: ${attrs.title || ""}`;
-    default:
-      return readableText(node) || node.type;
-  }
+  if (node.type === "mediaGroup") return "image: " + (node.content ?? []).map((c) => (c.attrs?.alt as string) || "file").join(", ");
+  const media = node.content?.find((c) => c.type === "media") ?? node;
+  return "image: " + ((media.attrs?.alt as string) || "image");
 }
 
 export function encodePlaceholder(node: AdfNode): string {
   const label = placeholderLabel(node).replace(/[[\]\\`\n]/g, "");
-  const scheme = MEDIA_TYPES.has(node.type) ? "tikmedia" : "tikadf";
   const encoded = Buffer.from(JSON.stringify(node)).toString("base64");
-  return `![${label}](${scheme}:${encoded})`;
+  return `![${label}](tikmedia:${encoded})`;
 }
 
 /**
@@ -109,8 +88,7 @@ export function decodeMediaPlaceholder(base64: string): AdfNode | null {
   }
 }
 
-/** `preserveUnknown` encodes nodes markdown cannot express as `tikadf:` placeholders, for edit round trips. */
-export function adfToMarkdown(adf: AdfNode | null | undefined, options: { preserveUnknown?: boolean } = {}): string {
+export function adfToMarkdown(adf: AdfNode | null | undefined): string {
   if (!adf) return "";
 
   const lines: string[] = [];
@@ -231,7 +209,7 @@ export function adfToMarkdown(adf: AdfNode | null | undefined, options: { preser
         break;
 
       default:
-        if (options.preserveUnknown || MEDIA_TYPES.has(node.type)) {
+        if (MEDIA_TYPES.has(node.type)) {
           lines.push(indent + encodePlaceholder(node));
         } else if (node.content) {
           for (const child of node.content) processNode(child, indent);
@@ -275,7 +253,7 @@ export function adfToMarkdown(adf: AdfNode | null | undefined, options: { preser
     if (node.type === "paragraph" || node.type === "heading") {
       return (node.content ?? []).map(extractText).join("");
     }
-    if (options.preserveUnknown || MEDIA_TYPES.has(node.type)) {
+    if (MEDIA_TYPES.has(node.type)) {
       return encodePlaceholder(node);
     }
     return node.content ? node.content.map(extractText).join("") : readableText(node);

@@ -199,3 +199,24 @@ The phase 2 property checks are unchanged (all 100%).
 - Remaining generic uses in the Confluence sample, in fields, not in the plan's list for this phase: `placeholder` nodes 58 (template pages) and media with a caption 8 (placeholder form), blockCard with a `datasource` 7, taskItem with hard breaks 5, annotation on a non-text node (a status) 5 and the `fragment` and `fontSize` block marks 5 (the `marks` rows), multiBodiedExtension 1, bodiedSyncBlock 1. Jira: media with a `link` mark 3 (PROD-820).
 - Scratch check (not committed): 20,000 documents with hostile strings in every macro, block mark, annotation, layout and decision attribute and label all round-trip exactly. Two identical annotation marks on one text merge on read, as identical marks always did.
 - `bun test`: 77 tests (6 new dialect rows, 1 reconcile test; fuzz pieces extended). `just check` passes.
+
+## Phase 7: cleanup and docs (2026-10-21)
+
+`just verify-roundtrip` runs in 21 s. Report: `reports/roundtrip-2026-10-21-phase7.json`. Numbers are unchanged from phase 6 (no codec change in this phase).
+
+| Source | Fields | Exact | Idempotent | Schema-valid | No-op identity | Crashes | Readable |
+|---|---|---|---|---|---|---|---|
+| Jira cache | 17,985 | 100% | 100% | 100% | 100% | 0 | 99.98% |
+| Confluence sample | 300 | 100% | 100% | 92% (originals 92%) | 100% | 0 | 71.67% |
+| Comment sample | 1,016 | 100% | 100% | 100% | 100% | 0 | 100% |
+
+Property checks (sample of 500): no-op identity 500/500, one sentence edited 408/408, guard quiet 408/408, delete 224/224, insert 224/224, guard fires on a dropped table 47/47 and panel 17/17 (all 100%).
+
+- Exit: this phase has no exit criteria of its own; the codec numbers did not move, `just check` passes and `bun test` is 78 tests.
+- Deleted: `preserveUnknown` and the `tikadf:` writer (`adfToMarkdown` takes no options, `encodePlaceholder` writes only `tikmedia:`, and its label code lost the status, date, macro and expand cases). The reader still decodes `tikadf:` in old markdown. The old parser was already gone in phase 1; `eval/roundtrip.ts` stopped counting `tikadf:` as a placeholder.
+- `tik restore KEY [--field F] [--at TS] [--dry-run] [--force]`: `findFieldBackup` in `lib/cache.ts` takes the newest backup of the ticket (optionally of one field, and among those whose file-name timestamp starts with `--at`). The command renders the backup's ADF with `adfToEditMarkdown`, prints the diff and loss guard, and writes through `cmdEdit` (description, AC, TI) or `cmdEditComment` (`comment-ID`), so the guard, a new backup, the `updated` re-check and the read-back all apply. Confluence page backups are not restorable with it; the docs say to pass the markdown to `tik doc edit`.
+  - Checked with `--dry-run` only on BACK-6342 (live read, nothing written) against a hand-made backup in `~/.cache/tik/backups`, removed afterwards: the diff and guard list print, `--field` with no backup and an `--at` with no match give `no_backup`, `--json` carries the dry-run payload. The write path was not run against Jira.
+  - `readFileArg` no longer throws on a long single-line value that contains `/` (`Bun.file().exists()` raised ENAMETOOLONG); restore passes markdown as a value, so it needed that.
+- Docs: `AGENTS.md` has the dialect table and the restore description; `README.md` mentions backups and restore; the local skill (`claude_skill/jira-cli/`, git-ignored) has the same table, a `restore` section and a command row.
+- Item 4 (single codec) skipped as instructed.
+- `bun test`: 78 tests (1 new, `lib/backup.test.ts`). `just check` passes.

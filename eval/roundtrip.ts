@@ -12,7 +12,7 @@ const toMarkdown = adfToEditMarkdown;
 const toAdf = markdownToAdf;
 
 // Readable: no placeholder and no generic directive (`adf=` / `marks=` attributes).
-const GENERIC_RE = /\]\((?:tikmedia|tikadf):|:+([A-Za-z]+)(?:\[[^\n]*?\])?\{[^}\n]*\b(?:adf|marks)=/g;
+const GENERIC_RE = /\]\(tikmedia:|:+([A-Za-z]+)(?:\[[^\n]*?\])?\{[^}\n]*\b(?:adf|marks)=/g;
 const genericUses = (markdown: string) => [...new Set([...markdown.matchAll(GENERIC_RE)].map((match) => match[1] ?? "placeholder"))];
 const TOP_DIFFS = 15;
 const CRASH_EXAMPLES = 5;
