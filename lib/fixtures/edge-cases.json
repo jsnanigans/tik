@@ -1,0 +1,1165 @@
+[
+  {
+    "name": "snake_case stays literal",
+    "markdown": "call some_snake_case_name and my_var_ here",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "call some"
+            },
+            {
+              "type": "text",
+              "text": "_"
+            },
+            {
+              "type": "text",
+              "text": "snake"
+            },
+            {
+              "type": "text",
+              "text": "_"
+            },
+            {
+              "type": "text",
+              "text": "case"
+            },
+            {
+              "type": "text",
+              "text": "_"
+            },
+            {
+              "type": "text",
+              "text": "name and my"
+            },
+            {
+              "type": "text",
+              "text": "_"
+            },
+            {
+              "type": "text",
+              "text": "var"
+            },
+            {
+              "type": "text",
+              "text": "_"
+            },
+            {
+              "type": "text",
+              "text": " here"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "underscore emphasis at word boundary",
+    "markdown": "this is _emphasised_ text",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "this is "
+            },
+            {
+              "type": "text",
+              "text": "emphasised",
+              "marks": [
+                {
+                  "type": "em"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": " text"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "star emphasis and strong",
+    "markdown": "*em* and **strong** and __strong__",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "em",
+              "marks": [
+                {
+                  "type": "em"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": " and "
+            },
+            {
+              "type": "text",
+              "text": "strong",
+              "marks": [
+                {
+                  "type": "strong"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": " and "
+            },
+            {
+              "type": "text",
+              "text": "strong",
+              "marks": [
+                {
+                  "type": "strong"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "strike and inline code",
+    "markdown": "~~gone~~ and `code`",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "gone",
+              "marks": [
+                {
+                  "type": "strike"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": " and "
+            },
+            {
+              "type": "text",
+              "text": "code",
+              "marks": [
+                {
+                  "type": "code"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "link",
+    "markdown": "see [the docs](https://example.com/a?b=1)",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "see "
+            },
+            {
+              "type": "text",
+              "text": "the docs",
+              "marks": [
+                {
+                  "type": "link",
+                  "attrs": {
+                    "href": "https://example.com/a?b=1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "two-space hard break",
+    "markdown": "line one  \nline two",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "line one"
+            },
+            {
+              "type": "hardBreak"
+            },
+            {
+              "type": "text",
+              "text": "line two"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "soft wrap joins with space",
+    "markdown": "line one\nline two\nline three",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "line one line two line three"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "trailing whitespace trimmed",
+    "markdown": "text   \n\nnext\t",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "text"
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "next"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "headings 1-6",
+    "markdown": "# a\n## b\n### c\n#### d\n##### e\n###### f",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 1
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 2
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 3
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "c"
+            }
+          ]
+        },
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 4
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "d"
+            }
+          ]
+        },
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 5
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "e"
+            }
+          ]
+        },
+        {
+          "type": "heading",
+          "attrs": {
+            "level": 6
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "f"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "nested bullets",
+    "markdown": "- a\n  - b\n    - c\n- d",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "a"
+                    }
+                  ]
+                },
+                {
+                  "type": "bulletList",
+                  "content": [
+                    {
+                      "type": "listItem",
+                      "content": [
+                        {
+                          "type": "paragraph",
+                          "content": [
+                            {
+                              "type": "text",
+                              "text": "b"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "bulletList",
+                          "content": [
+                            {
+                              "type": "listItem",
+                              "content": [
+                                {
+                                  "type": "paragraph",
+                                  "content": [
+                                    {
+                                      "type": "text",
+                                      "text": "c"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "d"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "ordered then bullet",
+    "markdown": "1. a\n2. b\n- c",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "orderedList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "a"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "b"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "c"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "star bullets",
+    "markdown": "* a\n* b",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "a"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "b"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "ordered start number dropped",
+    "markdown": "3. a\n4. b",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "orderedList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "a"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "b"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "list item with inline marks",
+    "markdown": "- **bold** then `code` and [l](http://x.y)",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "bold",
+                      "marks": [
+                        {
+                          "type": "strong"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "text": " then "
+                    },
+                    {
+                      "type": "text",
+                      "text": "code",
+                      "marks": [
+                        {
+                          "type": "code"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "text": " and "
+                    },
+                    {
+                      "type": "text",
+                      "text": "l",
+                      "marks": [
+                        {
+                          "type": "link",
+                          "attrs": {
+                            "href": "http://x.y"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "task list",
+    "markdown": "- [ ] todo\n- [x] done",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "taskList",
+          "attrs": {},
+          "content": [
+            {
+              "type": "taskItem",
+              "attrs": {
+                "state": "TODO"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "todo"
+                }
+              ]
+            },
+            {
+              "type": "taskItem",
+              "attrs": {
+                "state": "DONE"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "done"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "fenced code with language",
+    "markdown": "```ts\nconst a = 1;\n\nconst b = 2;\n```",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "codeBlock",
+          "attrs": {
+            "language": "ts"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "const a = 1;\n\nconst b = 2;"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "fenced code without language",
+    "markdown": "```\nplain\n```",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "codeBlock",
+          "attrs": {},
+          "content": [
+            {
+              "type": "text",
+              "text": "plain"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty fenced code",
+    "markdown": "```\n```",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "codeBlock",
+          "attrs": {},
+          "content": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "blockquote",
+    "markdown": "> quoted\n> more",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "blockquote",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "quoted"
+                },
+                {
+                  "type": "hardBreak"
+                },
+                {
+                  "type": "text",
+                  "text": "more"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "table with header",
+    "markdown": "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "table",
+          "content": [
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableHeader",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "a"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "tableHeader",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "b"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "1"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "2"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "3"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "4"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "table without separator",
+    "markdown": "| a | b |\n| 1 | 2 |",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "table",
+          "content": [
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableHeader",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "a"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "tableHeader",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "b"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "tableRow",
+              "content": [
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "1"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "tableCell",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "2"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "media placeholder on own line",
+    "markdown": "![image: shot.png](tikmedia:eyJ0eXBlIjoibWVkaWFTaW5nbGUiLCJhdHRycyI6eyJsYXlvdXQiOiJjZW50ZXIiLCJ3aWR0aCI6NTB9LCJjb250ZW50IjpbeyJ0eXBlIjoibWVkaWEiLCJhdHRycyI6eyJpZCI6IjBmMWUyZDNjLTExMTEtMjIyMi0zMzMzLTQ0NDQ1NTU1NjY2NiIsInR5cGUiOiJmaWxlIiwiY29sbGVjdGlvbiI6ImNvbnRlbnRJZC0xMjM0NSIsImFsdCI6InNob3QucG5nIn19XX0=)",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "mediaSingle",
+          "attrs": {
+            "layout": "center",
+            "width": 50
+          },
+          "content": [
+            {
+              "type": "media",
+              "attrs": {
+                "id": "0f1e2d3c-1111-2222-3333-444455556666",
+                "type": "file",
+                "collection": "contentId-12345",
+                "alt": "shot.png"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "media placeholder between text",
+    "markdown": "before\n\n![image: shot.png](tikmedia:eyJ0eXBlIjoibWVkaWFTaW5nbGUiLCJhdHRycyI6eyJsYXlvdXQiOiJjZW50ZXIiLCJ3aWR0aCI6NTB9LCJjb250ZW50IjpbeyJ0eXBlIjoibWVkaWEiLCJhdHRycyI6eyJpZCI6IjBmMWUyZDNjLTExMTEtMjIyMi0zMzMzLTQ0NDQ1NTU1NjY2NiIsInR5cGUiOiJmaWxlIiwiY29sbGVjdGlvbiI6ImNvbnRlbnRJZC0xMjM0NSIsImFsdCI6InNob3QucG5nIn19XX0=)\n\nafter",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "before"
+            }
+          ]
+        },
+        {
+          "type": "mediaSingle",
+          "attrs": {
+            "layout": "center",
+            "width": 50
+          },
+          "content": [
+            {
+              "type": "media",
+              "attrs": {
+                "id": "0f1e2d3c-1111-2222-3333-444455556666",
+                "type": "file",
+                "collection": "contentId-12345",
+                "alt": "shot.png"
+              }
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "after"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "opaque placeholder",
+    "markdown": "![status: DONE](tikadf:eyJ0eXBlIjoic3RhdHVzIiwiYXR0cnMiOnsidGV4dCI6IkRPTkUiLCJjb2xvciI6ImdyZWVuIn19)",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "status",
+              "attrs": {
+                "text": "DONE",
+                "color": "green"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "bold inside link text not nested",
+    "markdown": "[**x**](http://a.b)",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "**x**",
+              "marks": [
+                {
+                  "type": "link",
+                  "attrs": {
+                    "href": "http://a.b"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty input",
+    "markdown": "",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": []
+    }
+  },
+  {
+    "name": "blank lines only",
+    "markdown": "\n\n\n",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": []
+    }
+  },
+  {
+    "name": "unbalanced markup stays literal",
+    "markdown": "a * b and `c and [d",
+    "adf": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "a "
+            },
+            {
+              "type": "text",
+              "text": "*"
+            },
+            {
+              "type": "text",
+              "text": " b and "
+            },
+            {
+              "type": "text",
+              "text": "`"
+            },
+            {
+              "type": "text",
+              "text": "c and "
+            },
+            {
+              "type": "text",
+              "text": "["
+            },
+            {
+              "type": "text",
+              "text": "d"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,292 @@
+{
+  "date": "2026-10-21",
+  "preserveUnknown": true,
+  "sources": {
+    "jira": {
+      "tested": 17984,
+      "skipped": 0,
+      "exactRate": 59.53,
+      "readableRate": 51.32,
+      "idempotenceRate": 99.43,
+      "schemaValidRate": 99.96,
+      "originalSchemaValidRate": 100,
+      "crashes": 6,
+      "crashExamples": [
+        {
+          "field": "PROD-1072 description",
+          "error": "null is not an object (evaluating '[, indent, marker]')"
+        },
+        {
+          "field": "PROD-1050 acceptanceCriteria",
+          "error": "null is not an object (evaluating '[, indent, marker]')"
+        },
+        {
+          "field": "PMP-1265 description",
+          "error": "null is not an object (evaluating '[, indent, marker]')"
+        },
+        {
+          "field": "PROD-50 description",
+          "error": "null is not an object (evaluating '[, indent, marker]')"
+        },
+        {
+          "field": "FEWEB-1091 acceptanceCriteria",
+          "error": "null is not an object (evaluating '[, indent, marker]')"
+        }
+      ],
+      "topDiffs": [
+        {
+          "construct": "text chars",
+          "fields": 5570,
+          "example": "BACK-4096 description"
+        },
+        {
+          "construct": "paragraph",
+          "fields": 3310,
+          "example": "BACK-4096 description"
+        },
+        {
+          "construct": "hardBreak",
+          "fields": 1778,
+          "example": "BACK-5110 description"
+        },
+        {
+          "construct": "emoji",
+          "fields": 546,
+          "example": "BACK-5409 description"
+        },
+        {
+          "construct": "emoji.shortName",
+          "fields": 546,
+          "example": "BACK-5409 description"
+        },
+        {
+          "construct": "emoji.id",
+          "fields": 531,
+          "example": "BACK-5409 description"
+        },
+        {
+          "construct": "emoji.text",
+          "fields": 531,
+          "example": "BACK-5409 description"
+        },
+        {
+          "construct": "bulletList",
+          "fields": 375,
+          "example": "BACK-5664 description"
+        },
+        {
+          "construct": "listItem",
+          "fields": 346,
+          "example": "BACK-5737 description"
+        },
+        {
+          "construct": "mark:textColor",
+          "fields": 296,
+          "example": "PROD-1198 description"
+        },
+        {
+          "construct": "tableCell",
+          "fields": 265,
+          "example": "BACK-5919 testingInstructions"
+        },
+        {
+          "construct": "rule",
+          "fields": 247,
+          "example": "PMP-1611 description"
+        },
+        {
+          "construct": "orderedList",
+          "fields": 237,
+          "example": "BACK-5110 description"
+        },
+        {
+          "construct": "tableHeader",
+          "fields": 224,
+          "example": "BACK-5919 testingInstructions"
+        },
+        {
+          "construct": "mark:code",
+          "fields": 204,
+          "example": "FEWEB-2641 description"
+        }
+      ]
+    },
+    "confluence": {
+      "tested": 300,
+      "skipped": 0,
+      "exactRate": 22.67,
+      "readableRate": 4.67,
+      "idempotenceRate": 84.33,
+      "schemaValidRate": 95,
+      "originalSchemaValidRate": 92,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": [
+        {
+          "construct": "text chars",
+          "fields": 162,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "paragraph",
+          "fields": 129,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "table.width",
+          "fields": 120,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "tableCell",
+          "fields": 68,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "tableCell.colwidth",
+          "fields": 65,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "table.layout",
+          "fields": 57,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "hardBreak",
+          "fields": 56,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "tableHeader",
+          "fields": 53,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "tableHeader.colwidth",
+          "fields": 51,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "mark:textColor",
+          "fields": 47,
+          "example": "confluence 2173435916"
+        },
+        {
+          "construct": "tableCell.background",
+          "fields": 44,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "mark:underline",
+          "fields": 43,
+          "example": "confluence 1079017487"
+        },
+        {
+          "construct": "mark:strong",
+          "fields": 41,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "tableRow",
+          "fields": 28,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "mark:annotation",
+          "fields": 27,
+          "example": "confluence 584646657"
+        }
+      ]
+    },
+    "comments": {
+      "tested": 1016,
+      "skipped": 0,
+      "exactRate": 73.13,
+      "readableRate": 53.25,
+      "idempotenceRate": 97.44,
+      "schemaValidRate": 100,
+      "originalSchemaValidRate": 100,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": [
+        {
+          "construct": "text chars",
+          "fields": 221,
+          "example": "BACK-6280 comment 65812"
+        },
+        {
+          "construct": "emoji",
+          "fields": 113,
+          "example": "BACK-6280 comment 65838"
+        },
+        {
+          "construct": "emoji.shortName",
+          "fields": 113,
+          "example": "BACK-6280 comment 65838"
+        },
+        {
+          "construct": "emoji.id",
+          "fields": 107,
+          "example": "BACK-6280 comment 65838"
+        },
+        {
+          "construct": "emoji.text",
+          "fields": 107,
+          "example": "BACK-6280 comment 65838"
+        },
+        {
+          "construct": "paragraph",
+          "fields": 73,
+          "example": "BACK-6280 comment 65812"
+        },
+        {
+          "construct": "tableHeader.colwidth",
+          "fields": 44,
+          "example": "BACK-6383 comment 65843"
+        },
+        {
+          "construct": "tableCell.colwidth",
+          "fields": 44,
+          "example": "BACK-6383 comment 65843"
+        },
+        {
+          "construct": "table.layout",
+          "fields": 29,
+          "example": "BACK-6280 comment 65812"
+        },
+        {
+          "construct": "tableHeader",
+          "fields": 23,
+          "example": "BACK-6280 comment 65812"
+        },
+        {
+          "construct": "tableRow",
+          "fields": 22,
+          "example": "BACK-6280 comment 65812"
+        },
+        {
+          "construct": "hardBreak",
+          "fields": 22,
+          "example": "FEWEB-2787 comment 65750"
+        },
+        {
+          "construct": "listItem",
+          "fields": 10,
+          "example": "FEWEB-2675 comment 65497"
+        },
+        {
+          "construct": "bulletList",
+          "fields": 6,
+          "example": "FEWEB-2641 comment 64231"
+        },
+        {
+          "construct": "orderedList",
+          "fields": 5,
+          "example": "FEWEB-2675 comment 65497"
+        }
+      ]
+    }
+  },
+  "seconds": 1.4
+}

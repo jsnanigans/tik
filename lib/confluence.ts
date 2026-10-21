@@ -15,7 +15,7 @@ export interface ConfluencePage {
   updated: string | null;
 }
 
-async function confluenceRequest(
+export async function confluenceRequest(
   creds: Credentials,
   method: "GET" | "POST" | "PUT",
   endpoint: string,
