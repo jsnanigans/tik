@@ -139,3 +139,29 @@ Readable rate after each step (Jira 17,985 fields, Confluence 300, comments 1,01
 - Reconcile: a paired node keeps the original's attributes when they are equivalent (this restores `localId`, `layout: default` and the like on a table, row or cell whose cell text was edited), otherwise only its `localId`. It used to lose a table's `localId` when the edited table had no attributes. Dry-run check on BACK-6044 (live read, nothing written): editing one cell of a wrapped table gives `block 5.4.2.1 paragraph changed`, one diff line, guard quiet.
 - `bun test`: 65 tests (3 table dialect rows replace the one generic table row; 1 reconcile test; table pieces added to the fuzz). A separate 200,000-input fuzz with table pieces (not committed) found no throws and no instability. Text that holds a backslash before a newline, kept as text after an unknown directive, is unstable; it predates this phase (the same happens with `:::note`) and is not in the corpus.
 - `just check` passes.
+
+## Phase 5: the rest of Jira (2026-10-21)
+
+`just verify-roundtrip` runs in 23 s. Report: `reports/roundtrip-2026-10-21-phase5.json`. Exact, idempotence, schema-valid and crashes did not move (Jira 100% / 100% / 100% / 0; Confluence 100% / 100% / 92% (the originals' own rate) / 0; comments 100% / 100% / 100% / 0). The phase 2 property checks are unchanged (all 100%).
+
+| Source | Fields | Readable (phase 4) | Readable (phase 5) |
+|---|---|---|---|
+| Jira cache | 17,985 | 86.08% | 99.95% |
+| Confluence sample | 300 | 16.33% | 32.33% |
+| Comment sample | 1,016 | 81.20% | 100% |
+
+- Exit: Jira readable rate 99.95% (>= 99%) is met. The remaining generic uses, in Jira fields: empty task items 6 (FEWEB-2565 and others; GFM has no empty checkbox item, so the whole list keeps the generic form) and media with a `link` mark 3 (PROD-820). The empty task item is 6 fields, one over the plan's "fewer than 5"; it is listed here and not worked around.
+- Spellings:
+  - Task list: `- [ ] text` / `- [x] text`. An item must have inline content only and the `state` attribute; anything else uses the generic rule.
+  - `:::panel{type=info}` (also `color`, `icon`, `iconId`, `iconText`, from the Confluence sample), `:::expand{title=…}`, `:::nestedExpand{title=…}`. A panel needs `type`; an expand may have no attributes.
+  - Sub and superscript: `:span[2]{sup}`, `:span[i]{sub}`.
+  - Media: `::media[alt]{_id=… type=file collection=… originalWidth=… originalHeight=… layout=center width=… widthType=…}` is a mediaSingle holding one media (`layout` required to use it, else the placeholder). Inside `:::mediaGroup` the same leaf is the media itself. `:media[alt]{…}` is a mediaInline. The media's own `width` and `height` are written `originalWidth` and `originalHeight`, as on embed cards, because `width` is the mediaSingle's. `tikmedia:` and `tikadf:` are still read.
+- Deviations from the plan:
+  - `border` is spelled on the media (`border=#… borderSize=2`), not as `:span[x]{border=…}`: ADF allows the border mark only on media and mediaInline (22 Jira fields, all on media).
+  - Empty headings (45 fields, `heading` with no content, not named in the plan) are written `#`; they were the "heading" generic use of phase 4.
+  - Empty string attribute values are now allowed in the typed attributes (`collection=""` is the corpus's value on 2,100 media), written as a bare `collection`.
+- Leaf directive labels (`::card[url]`, `::media[alt]`) were not escaped by the writer, because a leaf label is not written inside a paragraph, so `Refine _fastpass UII_.png` read back as emphasis. A small `label` node now writes them with phrasing escapes (this also fixes cards whose url starts or ends with `_`).
+- New task and decision ids are derived from a counter and the text (sha1 formatted as a UUID), so the same markdown always produces the same ids; reconcile still restores the original ids.
+- Scratch check (not committed): 20,000 documents with hostile strings in every media, panel, expand, sub/sup and task attribute and label all round-trip exactly.
+- `bun test`: 70 tests (5 new dialect rows, 1 reader test for placeholders and derived ids, fuzz pieces extended). `just check` passes. `create --dry-run` with a task list, a panel and `::media` produces the expected ADF.
+- The harness writes `reports/roundtrip-<date>.json`, which overwrote the phase 0 baseline of the same name when run on the same day; the baseline was restored from git and the phase 5 report renamed.

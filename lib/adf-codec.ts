@@ -1,5 +1,6 @@
+import { createHash } from "crypto";
 import { fromMarkdown } from "mdast-util-from-markdown";
-import { toMarkdown, type Options as ToMarkdownOptions } from "mdast-util-to-markdown";
+import { toMarkdown, type Handle, type Options as ToMarkdownOptions } from "mdast-util-to-markdown";
 import { gfm } from "micromark-extension-gfm";
 import { gfmFromMarkdown, gfmToMarkdown } from "mdast-util-gfm";
 import { directive } from "micromark-extension-directive";
@@ -12,7 +13,7 @@ import { decodeMediaPlaceholder, encodePlaceholder, type AdfNode } from "./markd
 type Mark = NonNullable<AdfNode["marks"]>[number];
 type Attrs = Record<string, unknown>;
 type Directive = LeafDirective | ContainerDirective | TextDirective;
-type Context = { source: string; warnings: string[] };
+type Context = { source: string; warnings: string[]; ids: number };
 type Wrapper = { key: string; make: (children: PhrasingContent[]) => PhrasingContent };
 
 export type ParseResult = { doc: AdfNode; warnings: string[] };
@@ -51,6 +52,19 @@ type Kind = "string" | "number" | "flag" | "numbers";
 type AttrSpec = Record<string, [string, Kind]>;
 const TABLE_ATTRS: AttrSpec = { layout: ["layout", "string"], width: ["width", "number"], displayMode: ["displayMode", "string"], isNumberColumnEnabled: ["numbered", "flag"] };
 const CELL_ATTRS: AttrSpec = { colspan: ["colspan", "number"], rowspan: ["rowspan", "number"], background: ["bg", "string"], valign: ["valign", "string"], colwidth: ["colwidth", "numbers"] };
+const EXPAND_ATTRS: AttrSpec = { title: ["title", "string"] };
+const CONTAINER_ATTRS: Record<string, AttrSpec> = {
+  panel: { panelType: ["type", "string"], panelColor: ["color", "string"], panelIcon: ["icon", "string"], panelIconId: ["iconId", "string"], panelIconText: ["iconText", "string"] },
+  expand: EXPAND_ATTRS,
+  nestedExpand: EXPAND_ATTRS,
+};
+/** `::media[alt]{…}` is a mediaSingle holding one media; inside `:::mediaGroup` it is the media itself, and `:media[alt]{…}` is a mediaInline. */
+const MEDIA_ATTRS: AttrSpec = {
+  id: ["_id", "string"], type: ["type", "string"], collection: ["collection", "string"], occurrenceKey: ["occurrenceKey", "string"], url: ["url", "string"],
+  width: ["originalWidth", "number"], height: ["originalHeight", "number"],
+};
+const SINGLE_ATTRS: AttrSpec = { layout: ["layout", "string"], width: ["width", "number"], widthType: ["widthType", "string"] };
+const BORDER_ATTRS: AttrSpec = { color: ["border", "string"], size: ["borderSize", "number"] };
 
 const parseJson = (value: string | null | undefined): unknown => {
   try {
@@ -85,6 +99,14 @@ function directiveAttributes(node: AdfNode): Record<string, string> {
 /** A custom mdast node written verbatim: a media placeholder keeps the `![label](tikmedia:…)` form that `makeMediaPlaceholder` produces. */
 const raw = (value: string) => ({ type: "raw", value }) as unknown as PhrasingContent;
 const writeRaw = Object.assign((node: { value: string }) => node.value, { peek: (node: { value: string }) => node.value });
+/** A leaf directive label is not written inside a paragraph, so the writer would not escape `_` or `*` in it; this node does. */
+const labelNode = (value: string) => ({ type: "label", children: [{ type: "text", value }] }) as unknown as PhrasingContent;
+const writeLabel: Handle = (node, _parent, state, info) => {
+  const exit = state.enter("phrasing");
+  const out = state.containerPhrasing(node as never, info);
+  exit();
+  return out;
+};
 const placeholderOf = (node: AdfNode) => raw(encodePlaceholder(node));
 
 function blocksToMdast(nodes: AdfNode[] = []): RootContent[] {
@@ -92,7 +114,7 @@ function blocksToMdast(nodes: AdfNode[] = []): RootContent[] {
 }
 
 function blockToMdast(node: AdfNode): RootContent {
-  if (MEDIA_NODES.has(node.type)) return { type: "paragraph", children: [placeholderOf(node)] };
+  if (MEDIA_NODES.has(node.type)) return mediaToMdast(node) ?? { type: "paragraph", children: [placeholderOf(node)] };
   if (node.marks?.length) {
     return {
       type: "containerDirective",
@@ -113,7 +135,7 @@ function nativeBlock(node: AdfNode): RootContent | undefined {
     case "heading": {
       const level = attrs.level;
       const valid = Object.keys(attrs).length === 1 && Number.isInteger(level) && (level as number) >= 1 && (level as number) <= 6;
-      return valid && children.length ? { type: "heading", depth: level as 1, children: inlineToMdast(children, true) } : undefined;
+      return valid ? { type: "heading", depth: level as 1, children: inlineToMdast(children, true) } : undefined;
     }
     case "bulletList":
     case "orderedList":
@@ -122,6 +144,12 @@ function nativeBlock(node: AdfNode): RootContent | undefined {
       return codeToMdast(node);
     case "blockquote":
       return noAttrs(node) && children.length ? { type: "blockquote", children: blocksToMdast(children) as never } : undefined;
+    case "taskList":
+      return taskListToMdast(node);
+    case "panel":
+    case "expand":
+    case "nestedExpand":
+      return containerToMdast(node);
     case "rule":
       return noAttrs(node) && !children.length ? { type: "thematicBreak" } : undefined;
     case "table":
@@ -148,6 +176,19 @@ function listToMdast(node: AdfNode): List | undefined {
     return { type: "listItem", spread: !tight, checked: null, children: blocksToMdast(item.content) as ListItem["children"] };
   });
   return { type: "list", ordered, start: ordered ? orderOf(node) : null, spread: children.some((item) => item.spread), children };
+}
+
+/** Items are inline-only with a `state`; anything else (nested lists, other attributes, an empty item) uses the generic rule. */
+function taskListToMdast(node: AdfNode): List | undefined {
+  const items = node.content ?? [];
+  const simple = (item: AdfNode) =>
+    item.type === "taskItem" && Object.keys(attrsOf(item)).length === 1 && ["TODO", "DONE"].includes(attrsOf(item).state as string) &&
+    Boolean(item.content?.length) && item.content!.every((child) => INLINE_NODES.has(child.type));
+  if (!noAttrs(node) || !items.length || !items.every(simple)) return undefined;
+  const children = items.map((item): ListItem => ({
+    type: "listItem", spread: false, checked: attrsOf(item).state === "DONE", children: [{ type: "paragraph", children: inlineToMdast(item.content!) }],
+  }));
+  return { type: "list", ordered: false, start: null, spread: false, children };
 }
 
 function codeToMdast(node: AdfNode): RootContent | undefined {
@@ -186,15 +227,15 @@ function dedicatedToMdast(node: AdfNode): TextDirective | LeafDirective | undefi
   const spec = DEDICATED.find((candidate) => candidate.type === node.type);
   if (!spec || node.content?.length) return undefined;
   const attributes: Record<string, string> = { ...spec.variant };
-  let label: string | undefined;
+  let text: string | undefined;
   for (const [name, value] of Object.entries(attrsOf(node))) {
     if (value === DEFAULT_ATTRS[node.type]?.[name]) continue;
-    if (name === spec.label && isPlainText(value) && value) label = value;
+    if (name === spec.label && isPlainText(value) && value) text = value;
     else if (spec.attrs[name] === "string" && isPlainText(value)) attributes[markdownName(name)] = encodeAmpersands(value);
     else if (spec.attrs[name] === "number" && typeof value === "number" && Number.isFinite(value)) attributes[markdownName(name)] = String(value);
     else return undefined;
   }
-  const children = label ? [{ type: "text" as const, value: spec.block ? encodeAmpersands(label) : label }] : [];
+  const children = text ? [spec.block ? labelNode(text) : { type: "text" as const, value: text }] : [];
   return { type: spec.block ? "leafDirective" : "textDirective", name: spec.name, attributes, children } as TextDirective | LeafDirective;
 }
 
@@ -203,7 +244,7 @@ const isNumber = (value: unknown): value is number => typeof value === "number" 
 function encodeAttr(value: unknown, kind: Kind): string | undefined {
   switch (kind) {
     case "string":
-      return isPlainText(value) && value ? encodeAmpersands(value) : undefined;
+      return isPlainText(value) ? encodeAmpersands(value) : undefined;
     case "number":
       return isNumber(value) ? String(value) : undefined;
     case "flag":
@@ -272,6 +313,39 @@ function tableToMdast(node: AdfNode): RootContent | undefined {
   return directiveTable(rows, attributes);
 }
 
+/** A panel needs its `type`; the others may have no attributes. */
+function containerToMdast(node: AdfNode): ContainerDirective | undefined {
+  const attributes = attributesOf(node, CONTAINER_ATTRS[node.type]);
+  return attributes && (node.type !== "panel" || "type" in attributes) ? container(node.type, attributes, blocksToMdast(node.content)) : undefined;
+}
+
+/** `alt` is the label; a border mark and, for a mediaSingle, its own attributes share the attribute list. */
+function mediaDirective(kind: "leafDirective" | "textDirective", media: AdfNode, single?: AdfNode): LeafDirective | TextDirective | undefined {
+  const { alt, ...rest } = attrsOf(media);
+  const [border, ...otherMarks] = media.marks ?? [];
+  if (otherMarks.length > 0 || (border && border.type !== "border") || (alt !== undefined && !(isPlainText(alt) && alt))) return undefined;
+  const parts = [
+    attributesOf({ type: "media", attrs: rest }, MEDIA_ATTRS),
+    border ? attributesOf({ type: "border", attrs: border.attrs }, BORDER_ATTRS) : {},
+    single ? attributesOf(single, SINGLE_ATTRS) : {},
+  ];
+  if (!parts.every(Boolean)) return undefined;
+  const children = typeof alt === "string" ? [kind === "leafDirective" ? labelNode(alt) : { type: "text" as const, value: alt }] : [];
+  return { type: kind, name: "media", attributes: Object.assign({}, ...parts), children } as LeafDirective | TextDirective;
+}
+
+/** A mediaSingle needs its `layout`, which the reader would otherwise default. */
+function mediaToMdast(node: AdfNode): RootContent | undefined {
+  if (node.marks?.length) return undefined;
+  const content = node.content ?? [];
+  if (node.type === "mediaSingle") {
+    const [media] = content;
+    return media?.type === "media" && content.length === 1 && typeof node.attrs?.layout === "string" ? (mediaDirective("leafDirective", media, node) as LeafDirective) : undefined;
+  }
+  const children = content.map((media) => (media.type === "media" ? mediaDirective("leafDirective", media) : undefined));
+  return node.type === "mediaGroup" && noAttrs(node) && children.length > 0 && children.every(Boolean) ? container("mediaGroup", {}, children) : undefined;
+}
+
 function genericBlock(node: AdfNode): RootContent {
   const children = node.content ?? [];
   const attributes = directiveAttributes(node);
@@ -318,6 +392,8 @@ function wrappersOf(node: AdfNode): { chain: Wrapper[]; code: boolean } {
   const color = take("textColor", isColor);
   if (color) attributes.color = encodeAmpersands(color.attrs!.color as string);
   if (take("underline", plain)) attributes.underline = "";
+  const script = take("subsup", (mark) => Object.keys(mark.attrs ?? {}).length === 1 && (mark.attrs?.type === "sub" || mark.attrs?.type === "sup"));
+  if (script) attributes[script.attrs!.type as string] = "";
   const background = take("backgroundColor", isColor);
   if (background) attributes.bg = encodeAmpersands(background.attrs!.color as string);
   if (marks.length > 0) attributes.marks = encodeJson(marks);
@@ -330,7 +406,7 @@ function wrappersOf(node: AdfNode): { chain: Wrapper[]; code: boolean } {
 /** A hard break at the end of a block or inside a heading has no markdown form, so it is written as `:hardBreak`. */
 function leafToMdast(node: AdfNode, asDirective: boolean, code: boolean): PhrasingContent {
   if (node.type === "text") return code ? { type: "inlineCode", value: node.text ?? "" } : { type: "text", value: node.text ?? "" };
-  if (node.type === "mediaInline") return placeholderOf(node);
+  if (node.type === "mediaInline") return (mediaDirective("textDirective", { ...node, marks: undefined }) as TextDirective | undefined) ?? placeholderOf(node);
   const url = attrsOf(node).url;
   if (node.type === "inlineCard" && Object.keys(attrsOf(node)).length === 1 && typeof url === "string" && AUTOLINK.test(url)) return raw(`<${url}>`);
   if (node.type === "hardBreak" && noAttrs(node) && !asDirective) return { type: "break" };
@@ -373,7 +449,7 @@ const gfmWriter = gfmToMarkdown({ tablePipeAlign: false }).extensions!.slice(1);
 
 const writeOptions: ToMarkdownOptions = {
   extensions: [...gfmWriter, directiveToMarkdown({ quote: "'", preferUnquoted: true })],
-  handlers: { raw: writeRaw } as ToMarkdownOptions["handlers"],
+  handlers: { raw: writeRaw, label: writeLabel } as ToMarkdownOptions["handlers"],
   bullet: "-",
   emphasis: "_",
   strong: "*",
@@ -464,8 +540,14 @@ function dedicatedNode(node: Directive, ctx: Context): AdfNode | undefined {
   return Object.keys(attrs).length > 0 ? { type: spec.type, attrs } : undefined;
 }
 
-function finish(node: AdfNode): AdfNode {
-  if (LOCAL_ID_NODES.has(node.type)) node.attrs = { localId: crypto.randomUUID(), ...node.attrs };
+/** A new task or decision node gets an id derived from its position in the document and its text, so parsing the same markdown twice gives the same ids. */
+function finish(node: AdfNode, ctx: Context): AdfNode {
+  if (LOCAL_ID_NODES.has(node.type)) {
+    const text = (node.content ?? []).map((child) => child.text ?? "").join("");
+    const hex = createHash("sha1").update(`${ctx.ids++}:${node.type}:${text}`).digest("hex");
+    const localId = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join("-");
+    node.attrs = { localId, ...node.attrs };
+  }
   return node;
 }
 
@@ -529,15 +611,17 @@ function inlineFromMdast(nodes: PhrasingContent[], marks: Mark[], ctx: Context):
   return mergeText(out);
 }
 
-/** A span is `color`, `bg` and `underline` attributes, plus the generic `marks` JSON for every other mark. */
+/** A span is `color`, `bg`, `underline`, `sub` and `sup` attributes, plus the generic `marks` JSON for every other mark. */
 function marksOfSpan(node: TextDirective): Mark[] | undefined {
-  const { color, bg, underline, marks, ...other } = node.attributes ?? {};
+  const { color, bg, underline, sub, sup, marks, ...other } = node.attributes ?? {};
   const generic = marks === undefined || marks === null ? [] : parseJson(marks);
   if (Object.keys(other).length > 0 || !Array.isArray(generic)) return undefined;
   const result: Mark[] = generic.filter((mark): mark is Mark => typeof mark?.type === "string");
   if (color) result.push({ type: "textColor", attrs: { color } });
   if (bg) result.push({ type: "backgroundColor", attrs: { color: bg } });
   if (underline !== undefined && underline !== null) result.push({ type: "underline" });
+  if (sub !== undefined && sub !== null) result.push({ type: "subsup", attrs: { type: "sub" } });
+  else if (sup !== undefined && sup !== null) result.push({ type: "subsup", attrs: { type: "sup" } });
   return result.length > 0 ? result : undefined;
 }
 
@@ -546,13 +630,13 @@ function inlineDirective(node: TextDirective, marks: Mark[], ctx: Context): AdfN
     const spanMarks = marksOfSpan(node);
     if (spanMarks) return inlineFromMdast(node.children, spanMarks.reduce(withMark, marks), ctx);
   } else {
-    const dedicated = dedicatedNode(node, ctx);
-    if (dedicated) return [{ ...dedicated, ...(marks.length > 0 ? { marks } : {}) }];
+    const dedicated = dedicatedNode(node, ctx) ?? (node.name === "media" ? mediaFromDirective(node, "mediaInline", ctx) : undefined);
+    if (dedicated) return [{ ...dedicated, ...(marks.length > 0 ? { marks: [...(dedicated.marks ?? []), ...marks] } : {}) }];
     const spec = directiveSpec(node);
     if (spec) {
       if (node.children.length > 0) spec.content = inlineFromMdast(node.children, [], ctx);
       if (marks.length > 0) spec.marks = marks;
-      return [finish(spec)];
+      return [finish(spec, ctx)];
     }
   }
   unknownDirective(node, ctx);
@@ -596,14 +680,14 @@ function taskListFromMdast(items: ListItem[], ctx: Context): AdfNode[] {
   const out: AdfNode[] = [];
   let tasks: AdfNode[] = [];
   const flush = () => {
-    if (tasks.length > 0) out.push(finish({ type: "taskList", content: tasks }));
+    if (tasks.length > 0) out.push(finish({ type: "taskList", content: tasks }, ctx));
     tasks = [];
   };
   for (const item of items) {
     const [first, ...rest] = item.children;
     const label = first?.type === "paragraph" ? first : undefined;
     const content = label ? inlineFromMdast(label.children, [], ctx) : [];
-    tasks.push(finish({ type: "taskItem", attrs: { state: item.checked ? "DONE" : "TODO" }, content }));
+    tasks.push(finish({ type: "taskItem", attrs: { state: item.checked ? "DONE" : "TODO" }, content }, ctx));
     const nested = blocksFromMdast(label ? rest : item.children, ctx);
     if (nested.length > 0) {
       flush();
@@ -714,13 +798,49 @@ function tableDirective(node: ContainerDirective, ctx: Context): AdfNode | undef
   return withAttrs("table");
 }
 
+const keysOf = (spec: AttrSpec) => Object.values(spec).map(([key]) => key);
+
+/** The attributes split over the media, border and (for a mediaSingle) mediaSingle specs; a key in none of them, or no media attribute, is not a media. */
+function mediaFromDirective(node: LeafDirective | TextDirective, kind: "mediaSingle" | "media" | "mediaInline", ctx: Context): AdfNode | undefined {
+  const attributes = node.attributes ?? {};
+  const specs = kind === "mediaSingle" ? [MEDIA_ATTRS, BORDER_ATTRS, SINGLE_ATTRS] : [MEDIA_ATTRS, BORDER_ATTRS];
+  const parts = specs.map((spec) => attrsFrom(Object.fromEntries(Object.entries(attributes).filter(([key]) => keysOf(spec).includes(key))), spec));
+  if (!parts.every(Boolean) || !Object.keys(attributes).every((key) => specs.some((spec) => keysOf(spec).includes(key)))) return undefined;
+  const [mediaAttrs, border, single] = parts as Attrs[];
+  const alt = plainText(node.children as PhrasingContent[], ctx);
+  if (Object.keys(mediaAttrs).length === 0) return undefined;
+  const media: AdfNode = {
+    type: kind === "mediaSingle" ? "media" : kind,
+    attrs: { ...mediaAttrs, ...(alt ? { alt } : {}) },
+    ...(Object.keys(border).length > 0 ? { marks: [{ type: "border", attrs: border }] } : {}),
+  };
+  return kind === "mediaSingle" ? { type: "mediaSingle", attrs: { layout: "center", ...single }, content: [media] } : media;
+}
+
+function mediaGroupDirective(node: ContainerDirective, ctx: Context): AdfNode | undefined {
+  if (node.name !== "mediaGroup" || Object.keys(node.attributes ?? {}).length > 0) return undefined;
+  const content = node.children.map((child) => (child.type === "leafDirective" && child.name === "media" ? mediaFromDirective(child, "media", ctx) : undefined));
+  return content.length > 0 && content.every(Boolean) ? { type: "mediaGroup", content: content as AdfNode[] } : undefined;
+}
+
+/** `panel`, `expand` and `nestedExpand` without `adf`; a panel needs its `type`. */
+function containerDirective(node: ContainerDirective, ctx: Context): AdfNode | undefined {
+  const spec = CONTAINER_ATTRS[node.name];
+  const attrs = spec && attrsFrom(node.attributes ?? {}, spec);
+  if (!attrs || (node.name === "panel" && attrs.panelType === undefined)) return undefined;
+  return { type: node.name, ...(Object.keys(attrs).length > 0 ? { attrs } : {}), content: blocksFromMdast(node.children, ctx) };
+}
+
 function directiveBlock(node: LeafDirective | ContainerDirective, ctx: Context): AdfNode[] {
   if (node.type === "containerDirective" && node.name === "marks") {
     const marks = parseJson(node.attributes?.adf);
     if (Array.isArray(marks)) return blocksFromMdast(node.children, ctx).map((child) => ({ ...child, marks: [...(child.marks ?? []), ...marks] }));
   }
-  const table = node.type === "containerDirective" ? tableDirective(node, ctx) : undefined;
-  if (table) return [table];
+  const known =
+    node.type === "containerDirective"
+      ? (tableDirective(node, ctx) ?? containerDirective(node, ctx) ?? mediaGroupDirective(node, ctx))
+      : node.name === "media" ? mediaFromDirective(node, "mediaSingle", ctx) : undefined;
+  if (known) return [known];
   const dedicated = dedicatedNode(node, ctx);
   if (dedicated) return [dedicated];
   const spec = directiveSpec(node);
@@ -735,7 +855,7 @@ function directiveBlock(node: LeafDirective | ContainerDirective, ctx: Context):
   } else {
     spec.content = blocksFromMdast(node.children, ctx);
   }
-  return [finish(spec)];
+  return [finish(spec, ctx)];
 }
 
 function blockFromMdast(node: RootContent, ctx: Context): AdfNode[] {
@@ -776,7 +896,7 @@ function blocksFromMdast(nodes: RootContent[], ctx: Context): AdfNode[] {
 
 /** Never throws: what cannot be mapped becomes a paragraph of its source text, with a warning. */
 export function parseMarkdown(markdown: string): ParseResult {
-  const ctx: Context = { source: markdown, warnings: [] };
+  const ctx: Context = { source: markdown, warnings: [], ids: 0 };
   let content: AdfNode[];
   try {
     content = blocksFromMdast(fromMarkdown(markdown, readOptions).children, ctx);
