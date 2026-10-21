@@ -92,6 +92,7 @@ export {
   getFlowState,
   getFlowStateForBranch,
   getCachedIssuesRaw,
+  getKnownTeams,
   findIssuesContaining,
   getTimelineDates,
   rebuildFtsIndex,

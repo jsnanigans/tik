@@ -52,6 +52,7 @@ import {
   getUserAccountId,
   searchCache,
   getCachedIssuesRaw,
+  getKnownTeams,
   findIssuesContaining,
   getTimelineDates,
   type CacheSearchOpts,
@@ -922,6 +923,7 @@ type CreateTicketOptions = {
   assignToMe?: boolean;
   inProgress?: boolean;
   team?: boolean;
+  teamName?: string;
   sprint?: boolean | string;
   priority?: string;
   points?: string;
@@ -956,7 +958,9 @@ async function buildCreateFields(creds: Credentials, options: CreateTicketOption
     fields.assignee = { accountId };
   }
 
-  if (options.team) {
+  if (options.teamName) {
+    fields[requireCustomField("team")] = resolveTeamId(options.teamName);
+  } else if (options.team) {
     fields[requireCustomField("team")] = Config.myTeamId;
   }
 
@@ -2986,6 +2990,7 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   parent?: string;
   priority?: string;
   team?: boolean;
+  teamName?: string;
   sprint?: boolean | string;
   points?: string;
   acceptanceCriteria?: string;
@@ -3047,7 +3052,11 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     changes.push(`priority → ${PriorityNames[parseInt(priorityId)]}`);
   }
 
-  if (options.team) {
+  if (options.teamName) {
+    const teamId = resolveTeamId(options.teamName);
+    fields[requireCustomField("team")] = teamId;
+    changes.push(`team → ${teamDisplayName(teamId)}`);
+  } else if (options.team) {
     fields[requireCustomField("team")] = Config.myTeamId;
     changes.push(`team → ${MyTeamName}`);
   }
@@ -3123,7 +3132,8 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     out(`  -a, --assignee    Assignee (accountId, "me", or "none")`);
     out(`  --parent          Parent ticket key, or "none" to remove`);
     out(`  -p, --priority    Priority (1-5 or name)`);
-    out(`  -e, --team        Assign to your team (myTeamId)`);
+    out(`  -e                Assign to your team (myTeamId)`);
+    out(`  --team <name|id>  Assign to a team by name or id`);
     out(`  --current-sprint  Add to current sprint`);
     out(`  --sprint <id>     Add to specific sprint, or "none" to remove`);
     out(`  --points          Story points`);
@@ -5014,7 +5024,8 @@ const main = defineCommand({
         d: { type: "string", alias: "desc", description: "New description with markdown (or path to .md file)" },
         a: { type: "string", alias: "assignee", description: 'Assignee (accountId, "me", or "none")' },
         p: { type: "string", alias: "priority", description: "Priority (1-5 or name)" },
-        e: { type: "boolean", alias: "team", description: "Assign to your team (myTeamId)" },
+        e: { type: "boolean", description: "Assign to your team (myTeamId)" },
+        team: { type: "string", description: "Assign to a team by name or id (any team on cached tickets, or teamIdNames)" },
         "current-sprint": { type: "boolean", description: "Add to current sprint" },
         sprint: { type: "string", description: 'Sprint ID, or "none" to remove' },
         points: { type: "string", description: "Story points" },
@@ -5042,6 +5053,7 @@ const main = defineCommand({
           parent: typeof args.parent === "string" ? args.parent : undefined,
           priority: typeof args.p === "string" ? args.p : undefined,
           team: !!args.e,
+          teamName: teamNameArg(args),
           sprint: sprintValue,
           points: typeof args.points === "string" ? args.points : undefined,
           acceptanceCriteria: typeof args.ac === "string" ? args.ac : undefined,
@@ -5065,6 +5077,7 @@ const main = defineCommand({
         a: { type: "boolean", description: "Assign to me" },
         i: { type: "boolean", description: "Move to In Progress" },
         e: { type: "boolean", description: "Add your team (myTeamId)" },
+        team: { type: "string", description: "Add a team by name or id (any team on cached tickets, or teamIdNames)" },
         "current-sprint": { type: "boolean", description: "Add to current sprint" },
         sprint: { type: "string", description: "Add to specific sprint by ID" },
         priority: { type: "string", description: "Priority (1-5 or Highest/High/Medium/Low/Lowest)" },
@@ -5091,6 +5104,7 @@ const main = defineCommand({
           assignToMe: !!args.a,
           inProgress: !!args.i,
           team: !!args.e,
+          teamName: teamNameArg(args),
           sprint: typeof args.sprint === "string" ? args.sprint : !!args["current-sprint"],
           priority: typeof args.priority === "string" ? args.priority : undefined,
           points: typeof args.points === "string" ? args.points : undefined,
@@ -5912,12 +5926,35 @@ function applyListOptions(args: Record<string, unknown>): void {
   globalGroupByTeam = groupBy === "team";
 }
 
-function resolveTeamId(name: string): string {
+const TEAM_ID_RE = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const teamSlug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+/** Known teams: config first, then teams seen on cached tickets. */
+function knownTeams(): Array<[string, string]> {
   const teams = Object.entries(TeamIdNames);
   if (localConfig.myTeamId && localConfig.teamName) teams.push([localConfig.myTeamId, localConfig.teamName]);
-  const match = teams.find(([, teamName]) => teamName.toLowerCase() === name.toLowerCase());
-  if (!match) emitError("invalid_team", `Unknown team '${name}'. Use ${[...new Set(teams.map(([, teamName]) => teamName.toLowerCase()))].join(", ")}.`);
+  return [...teams, ...getKnownTeams()];
+}
+
+/** A team id, or a team name (case and punctuation insensitive). */
+function resolveTeamId(name: string): string {
+  if (TEAM_ID_RE.test(name)) return name;
+  const teams = knownTeams();
+  const match = teams.find(([, teamName]) => teamSlug(teamName) === teamSlug(name));
+  if (!match) emitError("invalid_team", `Unknown team '${name}'. Use ${[...new Set(teams.map(([, teamName]) => teamName.toLowerCase()))].join(", ")}, or a team id.`);
   return match[0];
+}
+
+/** The `--team` value of `create` and `edit`; it cannot be combined with `-e`. */
+function teamNameArg(args: Record<string, unknown>): string | undefined {
+  if (args.team === undefined) return undefined;
+  if (typeof args.team !== "string" || !args.team) emitError("invalid_team", "--team needs a team name or id (use -e for your own team)");
+  if (args.e) emitError("invalid_team", "Use either -e or --team, not both");
+  return args.team;
+}
+
+function teamDisplayName(teamId: string): string {
+  return knownTeams().find(([id]) => id === teamId)?.[1] ?? teamId;
 }
 
 async function getCredentials(args: Record<string, unknown>): Promise<Credentials> {

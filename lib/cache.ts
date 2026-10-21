@@ -1189,6 +1189,15 @@ export async function getCachedIssue(key: string): Promise<CachedIssue | null> {
   };
 }
 
+/** Teams (id → name) seen on cached tickets. */
+export function getKnownTeams(): Map<string, string> {
+  if (!customFields.team) return new Map();
+  const rows = getDb().query(
+    `SELECT DISTINCT json_extract(raw, '$.fields.${customFields.team}.id') AS id, json_extract(raw, '$.fields.${customFields.team}.name') AS name FROM issues`
+  ).all() as Array<{ id: string | null; name: string | null }>;
+  return new Map(rows.filter((r): r is { id: string; name: string } => !!r.id && !!r.name).map((r) => [r.id, r.name]));
+}
+
 export function getCachedIssuesRaw(keys: string[]): Map<string, unknown> {
   if (keys.length === 0) return new Map();
   const database = getDb();
