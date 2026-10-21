@@ -39,6 +39,31 @@ describe("reconcile", () => {
   });
 });
 
+describe("reconcile in tables", () => {
+  const cellOf = (type: string, localId: string, value: string): AdfNode => ({
+    type, attrs: { colwidth: [100], localId }, content: [p(text(value))],
+  });
+  const grid = doc({
+    type: "table",
+    attrs: { layout: "default", isNumberColumnEnabled: false, localId: "t" },
+    content: [
+      { type: "tableRow", attrs: { localId: "r1" }, content: [cellOf("tableHeader", "h", "head")] },
+      { type: "tableRow", attrs: { localId: "r2" }, content: [cellOf("tableCell", "c", "cell")] },
+    ],
+  });
+
+  test("editing a cell keeps the table, row and cell attributes", () => {
+    const md = adfToEditMarkdown(grid);
+    expect(md).toContain("colwidths=100");
+    const { doc: result, changes } = reconcile(grid, markdownToAdf(md.replace("| cell |", "| edited |")));
+    expect(changes).toEqual(["1.2.1.1 paragraph changed"]);
+    expect(result.content![0].attrs).toEqual(grid.content![0].attrs);
+    expect(result.content![0].content![0]).toBe(grid.content![0].content![0]);
+    expect(result.content![0].content![1].attrs).toEqual({ localId: "r2" });
+    expect(result.content![0].content![1].content![0]).toEqual(cellOf("tableCell", "c", "edited"));
+  });
+});
+
 describe("lostConstructs", () => {
   test("names the panel when it is dropped, nothing when it is kept", () => {
     expect(lostConstructs(original, doc(p(text("one"))))).toContain("panel");

@@ -120,3 +120,22 @@ Readable rate after each step (Jira 17,985 fields, Confluence 300, comments 1,01
 - The placeholder writer became a generic `raw` mdast node (also used for `<url>`).
 - Checked beyond the corpus with a scratch loop (not committed): 7,500 documents with hostile strings (`]`, `&amp;`, quotes, backslashes, newlines, empty values, `:`, `<>`, `{}`) in every dedicated attribute and label all round-trip exactly.
 - `bun test`: 62 tests (5 new: inline atoms, spans, cards, date label wins, prose that resembles a directive; fuzz pieces extended). `just check` passes.
+
+## Phase 4: readable tables (2026-10-21)
+
+`just verify-roundtrip` runs in 22 s. Report: `reports/roundtrip-2026-10-21-phase4.json` (it now also lists `genericUses`: fields per generic directive, placeholders counted as `placeholder`). Exact, idempotence, schema-valid and crashes did not move (Jira 100% / 100% / 100% / 0; Confluence 100% / 100% / 92% (the originals' own rate) / 0; comments 100% / 100% / 100% / 0). The phase 2 property checks are unchanged (all 100%).
+
+| Source | Fields | Readable (phase 3) | Readable (phase 4) |
+|---|---|---|---|
+| Jira cache | 17,985 | 83.03% | 86.08% |
+| Confluence sample | 300 | 11.00% | 16.33% |
+| Comment sample | 1,016 | 76.08% | 81.20% |
+
+- Exit met: no table uses the generic rule in any of the three sources (`genericUses` has no `table`, `tableRow`, `tableCell` or `tableHeader` entry). Jira's 826 tables: 391 as GFM tables (128 of them in a `:::table{…}` wrapper), 435 in the directive form.
+- Remaining Jira generic uses, in fields: media placeholders 2,183, taskItem 239, panel 70, heading 45, expand 14, span 5. Phase 5 covers them; the 45 headings with extra attributes and the 5 spans (annotation marks) are not named in the plan's phase 5 list.
+- Spelling: `:::table{layout=wide width=760 numbered colwidths=120,300}` around a GFM table; the directive form is `:::::table{…}` / `::::row` / `:::cell{header colspan=2 rowspan=2 bg=#e3fcef valign=top colwidth=100,200}`. Table attributes: `layout`, `width`, `numbered` (`isNumberColumnEnabled`), `displayMode`. `valign` and `displayMode` appear only in the Confluence sample and cost one spec entry each.
+- A GFM table is written only when its text reads back equivalent. This one guard covers pipes, hard breaks, block cells, cell attributes and every other case the plan lists for the directive form. Requirements for trying it: a header row of `tableHeader` cells, body rows of `tableCell`, one paragraph per cell. The widths of the first row are `colwidths`.
+- `table` is no longer in the attribute-less generic node list: a `:::table` without `adf` is read by the table spelling, or kept as text when its attributes or children do not fit (rows only, cells in rows). Old `:::::table` / `::::tableRow` / `:::tableCell` markdown still reads.
+- Reconcile: a paired node keeps the original's attributes when they are equivalent (this restores `localId`, `layout: default` and the like on a table, row or cell whose cell text was edited), otherwise only its `localId`. It used to lose a table's `localId` when the edited table had no attributes. Dry-run check on BACK-6044 (live read, nothing written): editing one cell of a wrapped table gives `block 5.4.2.1 paragraph changed`, one diff line, guard quiet.
+- `bun test`: 65 tests (3 table dialect rows replace the one generic table row; 1 reconcile test; table pieces added to the fuzz). A separate 200,000-input fuzz with table pieces (not committed) found no throws and no instability. Text that holds a backslash before a newline, kept as text after an unknown directive, is unstable; it predates this phase (the same happens with `:::note`) and is not in the corpus.
+- `just check` passes.

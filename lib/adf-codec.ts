@@ -6,7 +6,7 @@ import { directive } from "micromark-extension-directive";
 import { directiveFromMarkdown, directiveToMarkdown } from "mdast-util-directive";
 import type { ContainerDirective, LeafDirective, TextDirective } from "mdast-util-directive";
 import type { Link, List, ListItem, Paragraph, PhrasingContent, Root, RootContent, Table } from "mdast";
-import { DEFAULT_ATTRS, mergeText } from "./adf-reconcile";
+import { DEFAULT_ATTRS, equivalent, mergeText } from "./adf-reconcile";
 import { decodeMediaPlaceholder, encodePlaceholder, type AdfNode } from "./markdown";
 
 type Mark = NonNullable<AdfNode["marks"]>[number];
@@ -19,7 +19,7 @@ export type ParseResult = { doc: AdfNode; warnings: string[] };
 
 /** Node types that can have no attributes: only these are written, and read, as a directive without `adf`. */
 const ATTRLESS_NODES = new Set(
-  ("paragraph hardBreak table tableRow tableCell tableHeader mediaGroup layoutSection extensionFrame caption taskList " +
+  ("paragraph hardBreak tableRow tableCell tableHeader mediaGroup layoutSection extensionFrame caption taskList " +
     "decisionList bulletList orderedList listItem blockquote rule").split(" ")
 );
 const INLINE_NODES = new Set([
@@ -45,6 +45,12 @@ const DEDICATED: Dedicated[] = [
   },
   { type: "status", name: "status", label: "text", attrs: { color: "string", style: "string" } },
 ];
+
+/** Table, row and cell attributes: ADF name to directive name and value kind. A node with any other attribute uses the generic rule. */
+type Kind = "string" | "number" | "flag" | "numbers";
+type AttrSpec = Record<string, [string, Kind]>;
+const TABLE_ATTRS: AttrSpec = { layout: ["layout", "string"], width: ["width", "number"], displayMode: ["displayMode", "string"], isNumberColumnEnabled: ["numbered", "flag"] };
+const CELL_ATTRS: AttrSpec = { colspan: ["colspan", "number"], rowspan: ["rowspan", "number"], background: ["bg", "string"], valign: ["valign", "string"], colwidth: ["colwidth", "numbers"] };
 
 const parseJson = (value: string | null | undefined): unknown => {
   try {
@@ -118,6 +124,8 @@ function nativeBlock(node: AdfNode): RootContent | undefined {
       return noAttrs(node) && children.length ? { type: "blockquote", children: blocksToMdast(children) as never } : undefined;
     case "rule":
       return noAttrs(node) && !children.length ? { type: "thematicBreak" } : undefined;
+    case "table":
+      return tableToMdast(node);
   }
 }
 
@@ -188,6 +196,80 @@ function dedicatedToMdast(node: AdfNode): TextDirective | LeafDirective | undefi
   }
   const children = label ? [{ type: "text" as const, value: spec.block ? encodeAmpersands(label) : label }] : [];
   return { type: spec.block ? "leafDirective" : "textDirective", name: spec.name, attributes, children } as TextDirective | LeafDirective;
+}
+
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+function encodeAttr(value: unknown, kind: Kind): string | undefined {
+  switch (kind) {
+    case "string":
+      return isPlainText(value) && value ? encodeAmpersands(value) : undefined;
+    case "number":
+      return isNumber(value) ? String(value) : undefined;
+    case "flag":
+      return value === true ? "" : undefined;
+    case "numbers":
+      return Array.isArray(value) && value.length > 0 && value.every(isNumber) ? value.join(",") : undefined;
+  }
+}
+
+function attributesOf(node: AdfNode, spec: AttrSpec): Record<string, string> | undefined {
+  const attributes: Record<string, string> = {};
+  for (const [name, value] of Object.entries(attrsOf(node))) {
+    if (value === DEFAULT_ATTRS[node.type]?.[name]) continue;
+    const [key, kind] = spec[name] ?? [];
+    const text = kind && encodeAttr(value, kind);
+    if (text === undefined) return undefined;
+    attributes[key] = text;
+  }
+  return attributes;
+}
+
+const container = (name: string, attributes: Record<string, string>, children: unknown[]) =>
+  ({ type: "containerDirective", name, attributes, children }) as ContainerDirective;
+
+function cellToMdast(cell: AdfNode): ContainerDirective | undefined {
+  const attributes = cell.type === "tableCell" || cell.type === "tableHeader" ? attributesOf(cell, CELL_ATTRS) : undefined;
+  return attributes && container("cell", cell.type === "tableHeader" ? { header: "", ...attributes } : attributes, blocksToMdast(cell.content));
+}
+
+function directiveTable(rows: AdfNode[], attributes: Record<string, string>): ContainerDirective | undefined {
+  const rowDirectives = rows.map((row) => {
+    const cells = row.content!.map(cellToMdast);
+    return cells.every(Boolean) ? container("row", {}, cells) : undefined;
+  });
+  return rowDirectives.every(Boolean) ? container("table", attributes, rowDirectives) : undefined;
+}
+
+/** Header row of `tableHeader` cells, then rows of `tableCell`, one paragraph per cell. The widths of the first row are the column widths. */
+function gfmTable(rows: AdfNode[], attributes: Record<string, string>): RootContent | undefined {
+  const [head, ...body] = rows;
+  const cells = (row: AdfNode, type: string) => row.content!.every((cell) => cell.type === type && cell.content?.length === 1 && cell.content[0].type === "paragraph");
+  if (!cells(head, "tableHeader") || !body.every((row) => cells(row, "tableCell"))) return undefined;
+  const table: Table = {
+    type: "table",
+    align: head.content!.map(() => null),
+    children: rows.map((row) => ({
+      type: "tableRow",
+      children: row.content!.map((cell) => ({ type: "tableCell", children: inlineToMdast(cell.content![0].content ?? []) })),
+    })),
+  };
+  const widths = head.content!.map((cell) => (cell.attrs?.colwidth as unknown[] | undefined)?.[0]);
+  const withWidths: Record<string, string> = widths.every(isNumber) ? { ...attributes, colwidths: widths.join(",") } : attributes;
+  return Object.keys(withWidths).length > 0 ? container("table", withWidths, [table]) : table;
+}
+
+/** A GFM table is written only when it reads back equivalent; hard breaks, block cells and cell attributes use the directive form. */
+function tableToMdast(node: AdfNode): RootContent | undefined {
+  const attributes = attributesOf(node, TABLE_ATTRS);
+  const rows = node.content ?? [];
+  if (!attributes || !rows.every((row) => row.type === "tableRow" && noAttrs(row) && row.content?.length) || !rows.length) return undefined;
+  const simple = gfmTable(rows, attributes);
+  if (simple) {
+    const text = toMarkdown({ type: "root", children: [simple] }, writeOptions);
+    if (equivalent(parseMarkdown(text).doc, { type: "doc", version: 1, content: [node] } as AdfNode)) return simple;
+  }
+  return directiveTable(rows, attributes);
 }
 
 function genericBlock(node: AdfNode): RootContent {
@@ -579,11 +661,66 @@ function tableFromMdast(node: Table, ctx: Context): AdfNode {
   };
 }
 
+function decodeAttr(value: string | null | undefined, kind: Kind): unknown {
+  if (typeof value !== "string") return undefined;
+  const numbers = value.split(",").map((part) => (part === "" ? NaN : Number(part)));
+  switch (kind) {
+    case "string":
+      return value;
+    case "number":
+      return numbers.length === 1 && Number.isFinite(numbers[0]) ? numbers[0] : undefined;
+    case "flag":
+      return value === "" ? true : undefined;
+    case "numbers":
+      return numbers.every(Number.isFinite) ? numbers : undefined;
+  }
+}
+
+function attrsFrom(attributes: Record<string, string | null | undefined>, spec: AttrSpec): Attrs | undefined {
+  const names = Object.fromEntries(Object.entries(spec).map(([name, [key]]) => [key, name]));
+  const attrs: Attrs = {};
+  for (const [key, value] of Object.entries(attributes)) {
+    const name = names[key];
+    const decoded = name ? decodeAttr(value, spec[name][1]) : undefined;
+    if (decoded === undefined) return undefined;
+    attrs[name] = decoded;
+  }
+  return attrs;
+}
+
+const TABLE_DIRECTIVES = new Map<string, AttrSpec>([["table", TABLE_ATTRS], ["row", {}], ["cell", CELL_ATTRS]]);
+
+/** `table`, `row` and `cell` without `adf`. A table holds either a GFM table or rows; `colwidths` is applied to the cells of each row. */
+function tableDirective(node: ContainerDirective, ctx: Context): AdfNode | undefined {
+  const { adf, colwidths, header, ...attributes } = node.attributes ?? {};
+  const spec = TABLE_DIRECTIVES.get(node.name);
+  const unset = (value: unknown) => value === undefined || value === null;
+  const widths = unset(colwidths) ? [] : decodeAttr(colwidths, "numbers");
+  const attrs = spec && attrsFrom(attributes, spec);
+  const misplaced = !unset(adf) || (!unset(colwidths) && node.name !== "table") || (!unset(header) && node.name !== "cell");
+  if (!attrs || !Array.isArray(widths) || misplaced) return undefined;
+  const content = blocksFromMdast(node.children, ctx);
+  const gfm = node.name === "table" && content.length === 1 && content[0].type === "table";
+  const children = gfm ? content[0].content! : content;
+  const expected = { table: ["tableRow"], row: ["tableCell", "tableHeader"] }[node.name as "table" | "row"];
+  if (expected && (children.length === 0 || !children.every((child) => expected.includes(child.type)))) return undefined;
+  const withAttrs = (type: string): AdfNode => ({ type, ...(Object.keys(attrs).length > 0 ? { attrs } : {}), content: children });
+  if (node.name !== "table") return withAttrs(node.name === "row" ? "tableRow" : unset(header) ? "tableCell" : "tableHeader");
+  for (const row of children) {
+    row.content?.forEach((cell, index) => {
+      if (isNumber(widths[index])) cell.attrs = { ...cell.attrs, colwidth: [widths[index]] };
+    });
+  }
+  return withAttrs("table");
+}
+
 function directiveBlock(node: LeafDirective | ContainerDirective, ctx: Context): AdfNode[] {
   if (node.type === "containerDirective" && node.name === "marks") {
     const marks = parseJson(node.attributes?.adf);
     if (Array.isArray(marks)) return blocksFromMdast(node.children, ctx).map((child) => ({ ...child, marks: [...(child.marks ?? []), ...marks] }));
   }
+  const table = node.type === "containerDirective" ? tableDirective(node, ctx) : undefined;
+  if (table) return [table];
   const dedicated = dedicatedNode(node, ctx);
   if (dedicated) return [dedicated];
   const spec = directiveSpec(node);

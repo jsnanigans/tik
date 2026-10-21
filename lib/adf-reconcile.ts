@@ -134,9 +134,13 @@ function commonPairs(a: string[], b: string[]): [number, number][] {
   return pairs;
 }
 
-function keepLocalId(original: AdfNode, edited: AdfNode): AdfNode {
+/** A paired node keeps the original's attributes when they are equivalent (localId, defaults), else only its localId. */
+function keepAttrs(original: AdfNode, edited: AdfNode): AdfNode {
+  if (JSON.stringify(canonicalAttrs(edited.type, original.attrs)) === JSON.stringify(canonicalAttrs(edited.type, edited.attrs))) {
+    return original.attrs ? { ...edited, attrs: original.attrs } : edited;
+  }
   const localId = original.attrs?.localId;
-  return localId !== undefined && edited.attrs ? { ...edited, attrs: { ...edited.attrs, localId } } : edited;
+  return localId !== undefined ? { ...edited, attrs: { ...edited.attrs, localId } } : edited;
 }
 
 function pairNodes(original: AdfNode, edited: AdfNode, path: string, changes: string[]): AdfNode {
@@ -144,7 +148,7 @@ function pairNodes(original: AdfNode, edited: AdfNode, path: string, changes: st
     changes.push(`${path} ${original.type} -> ${edited.type}`);
     return edited;
   }
-  const node = keepLocalId(original, edited);
+  const node = keepAttrs(original, edited);
   if (!CONTAINERS.has(edited.type)) {
     changes.push(`${path} ${edited.type} changed`);
     return node;

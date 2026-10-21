@@ -1,0 +1,210 @@
+{
+  "date": "2026-10-21",
+  "sources": {
+    "jira": {
+      "tested": 17985,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 86.08,
+      "idempotenceRate": 100,
+      "schemaValidRate": 100,
+      "originalSchemaValidRate": 100,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": [],
+      "genericUses": [
+        {
+          "construct": "placeholder",
+          "fields": 2183,
+          "example": "FEWEB-2116 description"
+        },
+        {
+          "construct": "taskItem",
+          "fields": 239,
+          "example": "BACK-5931 acceptanceCriteria"
+        },
+        {
+          "construct": "panel",
+          "fields": 70,
+          "example": "BACK-5717 description"
+        },
+        {
+          "construct": "heading",
+          "fields": 45,
+          "example": "BACK-6035 description"
+        },
+        {
+          "construct": "expand",
+          "fields": 14,
+          "example": "BACK-2976 description"
+        },
+        {
+          "construct": "span",
+          "fields": 5,
+          "example": "PROD-1085 description"
+        }
+      ]
+    },
+    "confluence": {
+      "tested": 300,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 16.33,
+      "idempotenceRate": 100,
+      "schemaValidRate": 92,
+      "originalSchemaValidRate": 92,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": [],
+      "genericUses": [
+        {
+          "construct": "placeholder",
+          "fields": 139,
+          "example": "confluence 2619179048"
+        },
+        {
+          "construct": "panel",
+          "fields": 123,
+          "example": "confluence 1079017487"
+        },
+        {
+          "construct": "extension",
+          "fields": 72,
+          "example": "confluence 2619179048"
+        },
+        {
+          "construct": "marks",
+          "fields": 68,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "bodiedExtension",
+          "fields": 64,
+          "example": "confluence 2415296603"
+        },
+        {
+          "construct": "layoutColumn",
+          "fields": 55,
+          "example": "confluence 2608496643"
+        },
+        {
+          "construct": "span",
+          "fields": 34,
+          "example": "confluence 584646657"
+        },
+        {
+          "construct": "taskItem",
+          "fields": 24,
+          "example": "confluence 2619179048"
+        },
+        {
+          "construct": "expand",
+          "fields": 14,
+          "example": "confluence 1079017487"
+        },
+        {
+          "construct": "inlineExtension",
+          "fields": 7,
+          "example": "confluence 2616950793"
+        },
+        {
+          "construct": "blockCard",
+          "fields": 7,
+          "example": "confluence 2346450946"
+        },
+        {
+          "construct": "multiBodiedExtension",
+          "fields": 1,
+          "example": "confluence 2452291689"
+        },
+        {
+          "construct": "nestedExpand",
+          "fields": 1,
+          "example": "confluence 2566914051"
+        },
+        {
+          "construct": "bodiedSyncBlock",
+          "fields": 1,
+          "example": "confluence 2452226135"
+        }
+      ]
+    },
+    "comments": {
+      "tested": 1016,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 81.2,
+      "idempotenceRate": 100,
+      "schemaValidRate": 100,
+      "originalSchemaValidRate": 100,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": [],
+      "genericUses": [
+        {
+          "construct": "panel",
+          "fields": 99,
+          "example": "FEWEB-2787 comment 65840"
+        },
+        {
+          "construct": "placeholder",
+          "fields": 92,
+          "example": "BACK-6280 comment 65812"
+        },
+        {
+          "construct": "taskItem",
+          "fields": 1,
+          "example": "FEWEB-2641 comment 65021"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "sampled": 500,
+    "checks": {
+      "noOpIdentity": {
+        "tested": 500,
+        "passed": 500,
+        "rate": 100,
+        "failures": []
+      },
+      "singleSentenceEdit": {
+        "tested": 408,
+        "passed": 408,
+        "rate": 100,
+        "failures": []
+      },
+      "guardQuietWhenKept": {
+        "tested": 408,
+        "passed": 408,
+        "rate": 100,
+        "failures": []
+      },
+      "deleteBlock": {
+        "tested": 224,
+        "passed": 224,
+        "rate": 100,
+        "failures": []
+      },
+      "insertBlock": {
+        "tested": 224,
+        "passed": 224,
+        "rate": 100,
+        "failures": []
+      },
+      "guardFiresWhenDropped:table": {
+        "tested": 47,
+        "passed": 47,
+        "rate": 100,
+        "failures": []
+      },
+      "guardFiresWhenDropped:panel": {
+        "tested": 17,
+        "passed": 17,
+        "rate": 100,
+        "failures": []
+      }
+    }
+  },
+  "seconds": 21.6
+}

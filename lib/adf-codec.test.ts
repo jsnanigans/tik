@@ -9,6 +9,13 @@ const t = (text: string, ...marks: AdfNode["marks"] & object): AdfNode => ({ typ
 const li = (...content: AdfNode[]): AdfNode => ({ type: "listItem", content });
 const mark = (type: string, attrs?: Record<string, unknown>) => ({ type, ...(attrs ? { attrs } : {}) });
 
+const cell = (type: string, attrs: Record<string, unknown> | undefined, ...content: AdfNode[]): AdfNode => ({ type, ...(attrs ? { attrs } : {}), content });
+const table = (attrs: Record<string, unknown> | undefined, ...rows: AdfNode[][]): AdfNode => ({
+  type: "table",
+  ...(attrs ? { attrs } : {}),
+  content: rows.map((content) => ({ type: "tableRow", content })),
+});
+
 const media: AdfNode = {
   type: "mediaSingle",
   attrs: { layout: "center" },
@@ -96,9 +103,32 @@ const dialect: [string, AdfNode, string][] = [
     ].join("\n"),
   ],
   [
-    "nested generic nodes",
-    doc({ type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", attrs: { colspan: 2 }, content: [p(t("c"))] }] }] }),
-    [":::::table", "::::tableRow", ":::tableCell{adf='{\"colspan\":2}'}", "c", ":::", "::::", ":::::"].join("\n"),
+    "table with attributes and column widths",
+    doc(
+      table(
+        { layout: "wide", width: 760, isNumberColumnEnabled: true },
+        [cell("tableHeader", { colwidth: [120] }, p(t("a | b"))), cell("tableHeader", { colwidth: [300] }, p(t("c")))],
+        [cell("tableCell", { colwidth: [120] }, p(t("1"))), cell("tableCell", { colwidth: [300] }, p())]
+      ),
+      table(undefined, [cell("tableHeader", undefined, p(t("a")))], [cell("tableCell", undefined, p(t("b")))])
+    ),
+    ":::table{layout=wide width=760 numbered colwidths=120,300}\n| a \\| b | c |\n| - | - |\n| 1 | |\n:::\n\n| a |\n| - |\n| b |",
+  ],
+  [
+    "table with spans, background, blocks and a hard break",
+    doc(
+      table(
+        undefined,
+        [cell("tableCell", undefined, p(t("a"))), cell("tableHeader", undefined, p(t("b")))],
+        [cell("tableCell", { colspan: 2, background: "#e3fcef" }, p(t("x"), { type: "hardBreak" }, t("y")), { type: "bulletList", content: [li(p(t("i")))] })]
+      )
+    ),
+    [":::::table", "::::row", ":::cell", "a", ":::", "", ":::cell{header}", "b", ":::", "::::", "", "::::row", ":::cell{colspan=2 bg=#e3fcef}", "x\\", "y", "", "- i", ":::", "::::", ":::::"].join("\n"),
+  ],
+  [
+    "a table with an unknown attribute uses the generic rule",
+    doc(table({ extra: 1 }, [cell("tableCell", { colspan: 2 }, p(t("c")))])),
+    [":::::table{adf='{\"extra\":1}'}", "::::tableRow", ":::tableCell{adf='{\"colspan\":2}'}", "c", ":::", "::::", ":::::"].join("\n"),
   ],
 ];
 
@@ -147,7 +177,7 @@ describe.each(goldenFiles)("golden %s", (file) => {
 });
 
 describe("fuzz", () => {
-  const pieces = ["**", "_", "|", "- ", "1. ", "> ", "# ", "`", "```", "[", "](", "]", ":", ":::", "::", "{", "}", "\\", "\n", "\n\n", "  \n", "~~", "![", "<", "&", " ", "- [ ] ", "---", "a", ":x[", "adf='", "<http://x>", ":date[2026-01-01]", ":emoji[:a:]{_id=1}", "::card[http://x]{appearance=block}", ":span[a]{bg=#fff underline}"];
+  const pieces = ["**", "_", "|", "- ", "1. ", "> ", "# ", "`", "```", "[", "](", "]", ":", ":::", "::", "{", "}", "\\", "\n", "\n\n", "  \n", "~~", "![", "<", "&", " ", "- [ ] ", "---", "a", ":x[", "adf='", "<http://x>", ":date[2026-01-01]", ":emoji[:a:]{_id=1}", "::card[http://x]{appearance=block}", ":span[a]{bg=#fff underline}", ":::table{numbered colwidths=1,x}", "::::row", ":::cell{header colspan=2}", "| a | b |\n| - | - |\n"];
   const inputs: string[] = pieces.flatMap((a) => pieces.map((b) => a + b));
   let seed = 7;
   const next = (n: number) => (seed = (seed * 48271) % 2147483647) % n;

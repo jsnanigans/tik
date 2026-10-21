@@ -12,12 +12,13 @@ const toMarkdown = adfToEditMarkdown;
 const toAdf = markdownToAdf;
 
 // Readable: no placeholder and no generic directive (`adf=` / `marks=` attributes).
-const GENERIC_RE = /\]\((?:tikmedia|tikadf):|\{[^}\n]*\b(?:adf|marks)=/;
+const GENERIC_RE = /\]\((?:tikmedia|tikadf):|:+([A-Za-z]+)(?:\[[^\n]*?\])?\{[^}\n]*\b(?:adf|marks)=/g;
+const genericUses = (markdown: string) => [...new Set([...markdown.matchAll(GENERIC_RE)].map((match) => match[1] ?? "placeholder"))];
 const TOP_DIFFS = 15;
 const CRASH_EXAMPLES = 5;
 
 type Field = { label: string; adf: AdfNode };
-type Outcome = { exact: boolean; readable: boolean; idempotent: boolean; valid: boolean; crash?: string; diffs: string[] };
+type Outcome = { exact: boolean; readable: boolean; idempotent: boolean; valid: boolean; crash?: string; diffs: string[]; generic: string[] };
 
 const cacheDir = `${homedir()}/.cache/tik`;
 
@@ -54,13 +55,14 @@ function differingConstructs(original: AdfNode, result: AdfNode): string[] {
 }
 
 function roundTrip(adf: AdfNode): Outcome {
-  const outcome: Outcome = { exact: false, readable: false, idempotent: false, valid: false, diffs: [] };
+  const outcome: Outcome = { exact: false, readable: false, idempotent: false, valid: false, diffs: [], generic: [] };
   try {
     const markdown = toMarkdown(adf);
     const once = toAdf(markdown);
     const twice = toAdf(toMarkdown(once));
     outcome.exact = equivalent(adf, once);
-    outcome.readable = outcome.exact && !GENERIC_RE.test(markdown);
+    outcome.generic = genericUses(markdown);
+    outcome.readable = outcome.exact && outcome.generic.length === 0;
     outcome.idempotent = equivalent(once, twice);
     outcome.valid = validate(once) as boolean;
     if (!outcome.exact) outcome.diffs = differingConstructs(adf, once);
@@ -82,6 +84,7 @@ function evaluate(fields: Iterable<Field>) {
   let skipped = 0;
   const crashes: { field: string; error: string }[] = [];
   const diffs = new Map<string, { fields: number; example: string }>();
+  const generic = new Map<string, { fields: number; example: string }>();
   for (const { label, adf } of fields) {
     if (adf?.type !== "doc") {
       skipped++;
@@ -98,12 +101,19 @@ function evaluate(fields: Iterable<Field>) {
     if (outcome.readable) readable++;
     if (outcome.idempotent) idempotent++;
     if (outcome.valid) valid++;
-    for (const construct of outcome.diffs) {
-      const entry = diffs.get(construct) ?? { fields: 0, example: label };
-      entry.fields++;
-      diffs.set(construct, entry);
+    for (const [counts, names] of [[diffs, outcome.diffs], [generic, outcome.generic]] as const) {
+      for (const name of names) {
+        const entry = counts.get(name) ?? { fields: 0, example: label };
+        entry.fields++;
+        counts.set(name, entry);
+      }
     }
   }
+  const top = (counts: typeof diffs) =>
+    [...counts]
+      .sort((a, b) => b[1].fields - a[1].fields)
+      .slice(0, TOP_DIFFS)
+      .map(([construct, { fields, example }]) => ({ construct, fields, example }));
   return {
     tested,
     skipped,
@@ -114,10 +124,8 @@ function evaluate(fields: Iterable<Field>) {
     originalSchemaValidRate: pct(originalValid, tested),
     crashes: crashes.length,
     crashExamples: crashes.slice(0, CRASH_EXAMPLES),
-    topDiffs: [...diffs]
-      .sort((a, b) => b[1].fields - a[1].fields)
-      .slice(0, TOP_DIFFS)
-      .map(([construct, { fields, example }]) => ({ construct, fields, example })),
+    topDiffs: top(diffs),
+    genericUses: top(generic),
   };
 }
 
@@ -143,6 +151,7 @@ for (const [name, fields] of Object.entries(sources)) {
   );
   for (const crash of result.crashExamples) console.log(`  crash ${crash.field}: ${crash.error}`);
   for (const diff of result.topDiffs) console.log(`  ${String(diff.fields).padStart(6)}  ${diff.construct}  (${diff.example})`);
+  for (const use of result.genericUses) console.log(`  ${String(use.fields).padStart(6)}  generic ${use.construct}  (${use.example})`);
 }
 
 const sampleSources = [...jiraFields(), ...((await sampleFields("confluence.json", (page) => `confluence ${page.id}`)) ?? []), ...((await sampleFields("comments.json", (comment) => `${comment.key} comment ${comment.id}`)) ?? [])];
