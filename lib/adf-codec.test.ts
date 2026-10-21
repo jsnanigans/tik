@@ -90,6 +90,11 @@ const dialect: [string, AdfNode, string][] = [
     "- [x] a **b**\n- [ ] c",
   ],
   [
+    "empty and nested tasks",
+    doc({ type: "taskList", content: [{ type: "taskItem", attrs: { state: "TODO" }, content: [] }, { type: "taskList", content: [{ type: "taskItem", attrs: { state: "DONE" }, content: [t("a")] }] }] }),
+    "- [ ] :empty\n  - [x] a",
+  ],
+  [
     "panel and expand",
     doc(
       { type: "panel", attrs: { panelType: "info" }, content: [p(t("hi"))] },

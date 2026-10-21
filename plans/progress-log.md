@@ -146,11 +146,11 @@ Readable rate after each step (Jira 17,985 fields, Confluence 300, comments 1,01
 
 | Source | Fields | Readable (phase 4) | Readable (phase 5) |
 |---|---|---|---|
-| Jira cache | 17,985 | 86.08% | 99.95% |
+| Jira cache | 17,985 | 86.08% | 99.98% |
 | Confluence sample | 300 | 16.33% | 32.33% |
 | Comment sample | 1,016 | 81.20% | 100% |
 
-- Exit: Jira readable rate 99.95% (>= 99%) is met. The remaining generic uses, in Jira fields: empty task items 6 (FEWEB-2565 and others; GFM has no empty checkbox item, so the whole list keeps the generic form) and media with a `link` mark 3 (PROD-820). The empty task item is 6 fields, one over the plan's "fewer than 5"; it is listed here and not worked around.
+- Exit: Jira readable rate 99.98% (>= 99%) is met, and the one remaining generic use, in Jira fields, is media with a `link` mark: 3 fields (PROD-820), fewer than 5. Both sub-criteria are met after the review fix below.
 - Spellings:
   - Task list: `- [ ] text` / `- [x] text`. An item must have inline content only and the `state` attribute; anything else uses the generic rule.
   - `:::panel{type=info}` (also `color`, `icon`, `iconId`, `iconText`, from the Confluence sample), `:::expand{title=…}`, `:::nestedExpand{title=…}`. A panel needs `type`; an expand may have no attributes.
@@ -165,3 +165,10 @@ Readable rate after each step (Jira 17,985 fields, Confluence 300, comments 1,01
 - Scratch check (not committed): 20,000 documents with hostile strings in every media, panel, expand, sub/sup and task attribute and label all round-trip exactly.
 - `bun test`: 70 tests (5 new dialect rows, 1 reader test for placeholders and derived ids, fuzz pieces extended). `just check` passes. `create --dry-run` with a task list, a panel and `::media` produces the expected ADF.
 - The harness writes `reports/roundtrip-<date>.json`, which overwrote the phase 0 baseline of the same name when run on the same day; the baseline was restored from git and the phase 5 report renamed.
+
+### Phase 5 review fix (2026-10-21)
+
+- The review found 6 fields with empty task items (and so the generic form), over the limit of 5. Two spellings fix it: an empty item is written `- [ ] :empty` (GFM has no empty checkbox item; the reader treats a paragraph that is only `:empty` as no content), and a `taskList` nested in a `taskList` is a list under the item before it (`- [x] a\n  - [x] b`). A nested list after anything but a task item (two in a row) stays generic, because markdown would merge them.
+- Jira readable 99.98%; generic uses: placeholder 3 (PROD-820). Exact, idempotent, schema-valid 100% on Jira; Confluence 100% / 100% / 92% (originals 92%); comments 100%; crashes 0; property checks all 100%. Confluence readable 33%.
+- The harness report is now `reports/roundtrip-<date>-<time>.json`, so a run no longer overwrites the phase 0 baseline.
+- `bun test`: 71 tests (1 new row for empty and nested tasks). `just check` passes.

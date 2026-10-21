@@ -178,16 +178,28 @@ function listToMdast(node: AdfNode): List | undefined {
   return { type: "list", ordered, start: ordered ? orderOf(node) : null, spread: children.some((item) => item.spread), children };
 }
 
-/** Items are inline-only with a `state`; anything else (nested lists, other attributes, an empty item) uses the generic rule. */
+const EMPTY_TASK: TextDirective = { type: "textDirective", name: "empty", attributes: {}, children: [] };
+
+/** Items are inline-only with a `state`, an empty one is written `:empty`, and a nested task list is a list under the item before it; anything else uses the generic rule. */
 function taskListToMdast(node: AdfNode): List | undefined {
-  const items = node.content ?? [];
   const simple = (item: AdfNode) =>
     item.type === "taskItem" && Object.keys(attrsOf(item)).length === 1 && ["TODO", "DONE"].includes(attrsOf(item).state as string) &&
-    Boolean(item.content?.length) && item.content!.every((child) => INLINE_NODES.has(child.type));
-  if (!noAttrs(node) || !items.length || !items.every(simple)) return undefined;
-  const children = items.map((item): ListItem => ({
-    type: "listItem", spread: false, checked: attrsOf(item).state === "DONE", children: [{ type: "paragraph", children: inlineToMdast(item.content!) }],
-  }));
+    (item.content ?? []).every((child) => INLINE_NODES.has(child.type));
+  const children: ListItem[] = [];
+  let previous: AdfNode | undefined;
+  for (const item of node.content ?? []) {
+    if (simple(item)) {
+      children.push({
+        type: "listItem", spread: false, checked: attrsOf(item).state === "DONE", children: [{ type: "paragraph", children: item.content?.length ? inlineToMdast(item.content) : [EMPTY_TASK] }],
+      });
+    } else {
+      const nested = item.type === "taskList" ? taskListToMdast(item) : undefined;
+      if (!nested || previous?.type !== "taskItem") return undefined;
+      children.at(-1)!.children.push(nested);
+    }
+    previous = item;
+  }
+  if (!noAttrs(node) || !children.length) return undefined;
   return { type: "list", ordered: false, start: null, spread: false, children };
 }
 
@@ -675,7 +687,7 @@ function paragraphFromMdast(node: Paragraph, ctx: Context): AdfNode[] {
   return out;
 }
 
-/** Task items hold inline content only, so blocks nested in an item end the task list and follow it. */
+/** Task items hold inline content only, so a nested task list stays in the list and other blocks nested in an item end it and follow it. */
 function taskListFromMdast(items: ListItem[], ctx: Context): AdfNode[] {
   const out: AdfNode[] = [];
   let tasks: AdfNode[] = [];
@@ -686,8 +698,16 @@ function taskListFromMdast(items: ListItem[], ctx: Context): AdfNode[] {
   for (const item of items) {
     const [first, ...rest] = item.children;
     const label = first?.type === "paragraph" ? first : undefined;
-    const content = label ? inlineFromMdast(label.children, [], ctx) : [];
+    const [only] = label?.children ?? [];
+    const empty = label?.children.length === 1 && only.type === "textDirective" && only.name === "empty";
+    const content = label && !empty ? inlineFromMdast(label.children, [], ctx) : [];
     tasks.push(finish({ type: "taskItem", attrs: { state: item.checked ? "DONE" : "TODO" }, content }, ctx));
+    const [list] = rest;
+    const nestedTasks = rest.length === 1 && list.type === "list" && list.children.every((child) => typeof child.checked === "boolean") ? taskListFromMdast(list.children, ctx) : [];
+    if (label && nestedTasks.length === 1 && nestedTasks[0].type === "taskList") {
+      tasks.push(nestedTasks[0]);
+      continue;
+    }
     const nested = blocksFromMdast(label ? rest : item.children, ctx);
     if (nested.length > 0) {
       flush();

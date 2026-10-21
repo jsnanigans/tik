@@ -165,6 +165,6 @@ for (const [name, { tested, passed, rate, failures }] of Object.entries(properti
 report.seconds = Math.round((performance.now() - started) / 100) / 10;
 const reportsDir = `${import.meta.dir}/../reports`;
 mkdirSync(reportsDir, { recursive: true });
-const path = `${reportsDir}/roundtrip-${report.date}.json`;
+const path = `${reportsDir}/roundtrip-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.json`;
 await Bun.write(path, JSON.stringify(report, null, 2) + "\n");
 console.log(`${report.seconds}s, report: ${path}`);
