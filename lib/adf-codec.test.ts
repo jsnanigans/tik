@@ -41,18 +41,54 @@ const dialect: [string, AdfNode, string][] = [
   ["literal markup", doc(p(t("- not a list *nor em* :foo[x] | `c` [a](b)"))), "\\- not a list \\*nor em\\* \\:foo\\[x] | \\`c\\` \\[a]\\(b)"],
   ["media placeholder", doc(media), encodePlaceholder(media)],
   [
+    "inline atoms",
+    doc(
+      p(
+        t("see "),
+        { type: "inlineCard", attrs: { url: "https://x.y/a_b?q=1&r=2" } },
+        t(" "),
+        t("https://x.y", mark("link", { href: "https://x.y" })),
+        t(" "),
+        { type: "emoji", attrs: { shortName: ":cross_mark:", id: "atlassian-cross_mark", text: ":cross_mark:" } },
+        t(" "),
+        { type: "mention", attrs: { id: "557058:ab", text: "@Jane Doe" } },
+        t(" "),
+        { type: "status", attrs: { text: "IN QA", color: "blue", style: "bold" } },
+        t(" "),
+        { type: "date", attrs: { timestamp: "1793664000000" } },
+        t(" "),
+        { type: "date", attrs: { timestamp: "1793664000001" } }
+      )
+    ),
+    "see <https://x.y/a_b?q=1&r=2> [https://x.y](https://x.y) :emoji[:cross_mark:]{_id=atlassian-cross_mark text=:cross_mark:} " +
+      ":mention[@Jane Doe]{_id=557058:ab} :status[IN QA]{color=blue style=bold} :date[2026-11-03] :date[2026-11-03]{timestamp=1793664000001}",
+  ],
+  [
+    "color, underline and background spans",
+    doc(p(t("red", mark("textColor", { color: "#ff5630" }), mark("underline"), mark("backgroundColor", { color: "#fdd0ec" })))),
+    ":span[red]{color=#ff5630 underline bg=#fdd0ec}",
+  ],
+  [
+    "block and embed cards",
+    doc(
+      { type: "blockCard", attrs: { url: "https://a.b/c", layout: "center" } },
+      { type: "embedCard", attrs: { url: "https://a.b/d", layout: "center", width: 100, originalWidth: 853.344 } }
+    ),
+    "::card[https://a.b/c]{appearance=block layout=center}\n\n::card[https://a.b/d]{appearance=embed layout=center width=100 originalWidth=853.344}",
+  ],
+  [
     "generic node, mark and block mark",
     doc(
-      { type: "panel", attrs: { panelType: "info" }, content: [p(t("hi "), { type: "mention", attrs: { id: "5", text: "@Jane" } })] },
-      p(t("red", mark("textColor", { color: "#f00" }))),
+      { type: "panel", attrs: { panelType: "info" }, content: [p(t("hi "), { type: "futureNode", attrs: { n: 1 } })] },
+      p(t("sub", mark("subsup", { type: "sub" }))),
       { type: "paragraph", marks: [mark("alignment", { align: "center" })], content: [t("mid")] }
     ),
     [
       ":::panel{adf='{\"panelType\":\"info\"}'}",
-      "hi :mention{adf='{\"id\":\"5\",\"text\":\"@Jane\"}'}",
+      "hi :futureNode{adf='{\"n\":1}'}",
       ":::",
       "",
-      ":span[red]{marks='[{\"type\":\"textColor\",\"attrs\":{\"color\":\"#f00\"}}]'}",
+      ":span[sub]{marks='[{\"type\":\"subsup\",\"attrs\":{\"type\":\"sub\"}}]'}",
       "",
       ":::marks{adf='[{\"type\":\"alignment\",\"attrs\":{\"align\":\"center\"}}]'}",
       "mid",
@@ -86,6 +122,16 @@ describe("reader", () => {
     expect(warnings).toHaveLength(1);
   });
 
+  test("an edited date label wins over a stale timestamp", () => {
+    expect(markdownToAdf(":date[2026-11-04]{timestamp=1793664000000}").content).toEqual([p({ type: "date", attrs: { timestamp: "1793750400000" } })]);
+  });
+
+  test("prose that only resembles a dedicated directive stays text", () => {
+    const { doc: result, warnings } = parseMarkdown(":mention :date[soon] :status[x]{size=1}");
+    expect(result.content).toEqual([p(t(":mention :date[soon] :status[x]{size=1}"))]);
+    expect(warnings).toHaveLength(3);
+  });
+
   test("code with a mark ADF forbids next to it keeps only code", () => {
     expect(markdownToAdf("**`x`**").content).toEqual([p(t("x", mark("code")))]);
   });
@@ -101,7 +147,7 @@ describe.each(goldenFiles)("golden %s", (file) => {
 });
 
 describe("fuzz", () => {
-  const pieces = ["**", "_", "|", "- ", "1. ", "> ", "# ", "`", "```", "[", "](", "]", ":", ":::", "::", "{", "}", "\\", "\n", "\n\n", "  \n", "~~", "![", "<", "&", " ", "- [ ] ", "---", "a", ":x[", "adf='"];
+  const pieces = ["**", "_", "|", "- ", "1. ", "> ", "# ", "`", "```", "[", "](", "]", ":", ":::", "::", "{", "}", "\\", "\n", "\n\n", "  \n", "~~", "![", "<", "&", " ", "- [ ] ", "---", "a", ":x[", "adf='", "<http://x>", ":date[2026-01-01]", ":emoji[:a:]{_id=1}", "::card[http://x]{appearance=block}", ":span[a]{bg=#fff underline}"];
   const inputs: string[] = pieces.flatMap((a) => pieces.map((b) => a + b));
   let seed = 7;
   const next = (n: number) => (seed = (seed * 48271) % 2147483647) % n;

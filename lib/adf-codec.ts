@@ -5,8 +5,8 @@ import { gfmFromMarkdown, gfmToMarkdown } from "mdast-util-gfm";
 import { directive } from "micromark-extension-directive";
 import { directiveFromMarkdown, directiveToMarkdown } from "mdast-util-directive";
 import type { ContainerDirective, LeafDirective, TextDirective } from "mdast-util-directive";
-import type { List, ListItem, Paragraph, PhrasingContent, Root, RootContent, Table } from "mdast";
-import { mergeText } from "./adf-reconcile";
+import type { Link, List, ListItem, Paragraph, PhrasingContent, Root, RootContent, Table } from "mdast";
+import { DEFAULT_ATTRS, mergeText } from "./adf-reconcile";
 import { decodeMediaPlaceholder, encodePlaceholder, type AdfNode } from "./markdown";
 
 type Mark = NonNullable<AdfNode["marks"]>[number];
@@ -31,6 +31,20 @@ const LIST_ITEM_CHILDREN = new Set(["paragraph", "codeBlock", "mediaSingle", "bu
 const QUOTE_CHILDREN = new Set(["paragraph", "bulletList", "orderedList", "codeBlock", "mediaGroup", "mediaSingle"]);
 const CODE_EXCLUDES = new Set(["strong", "em", "strike", "underline", "textColor", "backgroundColor", "subsup"]);
 const SAFE_LANGUAGE = /^[^\s`{][^\s`]*$/;
+const AUTOLINK = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>\u0000-\u001f\u007f]*$/;
+
+/** Readable spellings, `:name[label]{attrs}`; every other node uses the generic rule. `label` names the attribute shown as the label. */
+type Dedicated = { type: string; name: string; label: string; attrs: Record<string, "string" | "number">; block?: true; variant?: Record<string, string> };
+const DEDICATED: Dedicated[] = [
+  { type: "emoji", name: "emoji", label: "shortName", attrs: { id: "string", text: "string" } },
+  { type: "mention", name: "mention", label: "text", attrs: { id: "string", accessLevel: "string" } },
+  { type: "blockCard", name: "card", label: "url", attrs: { layout: "string", width: "number" }, block: true, variant: { appearance: "block" } },
+  {
+    type: "embedCard", name: "card", label: "url", block: true, variant: { appearance: "embed" },
+    attrs: { layout: "string", width: "number", originalWidth: "number", originalHeight: "number" },
+  },
+  { type: "status", name: "status", label: "text", attrs: { color: "string", style: "string" } },
+];
 
 const parseJson = (value: string | null | undefined): unknown => {
   try {
@@ -62,9 +76,10 @@ function directiveAttributes(node: AdfNode): Record<string, string> {
   return Object.keys(attrs).length > 0 || !ATTRLESS_NODES.has(node.type) ? { adf: encodeJson(attrs) } : {};
 }
 
-/** A custom mdast node written verbatim, so a placeholder keeps the `![label](tikmedia:…)` form that `makeMediaPlaceholder` produces. */
-const placeholderOf = (node: AdfNode) => ({ type: "placeholder", value: encodePlaceholder(node) }) as unknown as PhrasingContent;
-const writePlaceholder = Object.assign((node: { value: string }) => node.value, { peek: () => "!" });
+/** A custom mdast node written verbatim: a media placeholder keeps the `![label](tikmedia:…)` form that `makeMediaPlaceholder` produces. */
+const raw = (value: string) => ({ type: "raw", value }) as unknown as PhrasingContent;
+const writeRaw = Object.assign((node: { value: string }) => node.value, { peek: (node: { value: string }) => node.value });
+const placeholderOf = (node: AdfNode) => raw(encodePlaceholder(node));
 
 function blocksToMdast(nodes: AdfNode[] = []): RootContent[] {
   return nodes.map(blockToMdast);
@@ -80,7 +95,7 @@ function blockToMdast(node: AdfNode): RootContent {
       children: [blockToMdast({ ...node, marks: undefined })] as ContainerDirective["children"],
     };
   }
-  return nativeBlock(node) ?? genericBlock(node);
+  return nativeBlock(node) ?? dedicatedToMdast(node) ?? genericBlock(node);
 }
 
 function nativeBlock(node: AdfNode): RootContent | undefined {
@@ -142,6 +157,39 @@ function codeToMdast(node: AdfNode): RootContent | undefined {
   };
 }
 
+/** ADF `id` and `class` attributes are written `_id` and `_class`, because the directive syntax gives those names a meaning. */
+const markdownName = (name: string) => (name === "id" || name === "class" ? `_${name}` : name);
+
+const isPlainText = (value: unknown): value is string => typeof value === "string" && !/[\r\n]/.test(value);
+
+const isoDate = (timestamp: number) => new Date(timestamp).toISOString().slice(0, 10);
+
+/** The label is the UTC day; the timestamp is only written when it is not that day's midnight. */
+function dateToMdast(node: AdfNode): TextDirective | undefined {
+  const { timestamp, ...other } = attrsOf(node);
+  if (Object.keys(other).length > 0 || typeof timestamp !== "string" || !/^\d{1,13}$/.test(timestamp)) return undefined;
+  const day = isoDate(Number(timestamp));
+  const attributes = String(Date.parse(day)) === timestamp ? {} : { timestamp };
+  return { type: "textDirective", name: "date", attributes, children: [{ type: "text", value: day }] };
+}
+
+function dedicatedToMdast(node: AdfNode): TextDirective | LeafDirective | undefined {
+  if (node.type === "date") return dateToMdast(node);
+  const spec = DEDICATED.find((candidate) => candidate.type === node.type);
+  if (!spec || node.content?.length) return undefined;
+  const attributes: Record<string, string> = { ...spec.variant };
+  let label: string | undefined;
+  for (const [name, value] of Object.entries(attrsOf(node))) {
+    if (value === DEFAULT_ATTRS[node.type]?.[name]) continue;
+    if (name === spec.label && isPlainText(value) && value) label = value;
+    else if (spec.attrs[name] === "string" && isPlainText(value)) attributes[markdownName(name)] = encodeAmpersands(value);
+    else if (spec.attrs[name] === "number" && typeof value === "number" && Number.isFinite(value)) attributes[markdownName(name)] = String(value);
+    else return undefined;
+  }
+  const children = label ? [{ type: "text" as const, value: spec.block ? encodeAmpersands(label) : label }] : [];
+  return { type: spec.block ? "leafDirective" : "textDirective", name: spec.name, attributes, children } as TextDirective | LeafDirective;
+}
+
 function genericBlock(node: AdfNode): RootContent {
   const children = node.content ?? [];
   const attributes = directiveAttributes(node);
@@ -166,6 +214,7 @@ function wrappersOf(node: AdfNode): { chain: Wrapper[]; code: boolean } {
     return index < 0 ? undefined : marks.splice(index, 1)[0];
   };
   const plain = (mark: Mark) => !mark.attrs || Object.keys(mark.attrs).length === 0;
+  const isColor = (mark: Mark) => Object.keys(mark.attrs ?? {}).length === 1 && isPlainText(mark.attrs?.color) && mark.attrs?.color !== "";
   const link = take("link", (mark) => {
     const { href, title, ...other } = mark.attrs ?? {};
     return typeof href === "string" && (title === undefined || typeof title === "string") && Object.keys(other).length === 0;
@@ -183,9 +232,15 @@ function wrappersOf(node: AdfNode): { chain: Wrapper[]; code: boolean } {
   if (strong) chain.push({ key: "strong", make: (children) => ({ type: "strong", children }) });
   if (em) chain.push({ key: "em", make: (children) => ({ type: "emphasis", children }) });
   if (strike) chain.push({ key: "strike", make: (children) => ({ type: "delete", children }) });
-  if (marks.length > 0) {
-    const encoded = encodeJson(marks);
-    chain.push({ key: `span ${encoded}`, make: (children) => ({ type: "textDirective", name: "span", attributes: { marks: encoded }, children }) });
+  const attributes: Record<string, string> = {};
+  const color = take("textColor", isColor);
+  if (color) attributes.color = encodeAmpersands(color.attrs!.color as string);
+  if (take("underline", plain)) attributes.underline = "";
+  const background = take("backgroundColor", isColor);
+  if (background) attributes.bg = encodeAmpersands(background.attrs!.color as string);
+  if (marks.length > 0) attributes.marks = encodeJson(marks);
+  if (Object.keys(attributes).length > 0) {
+    chain.push({ key: `span ${JSON.stringify(attributes)}`, make: (children) => ({ type: "textDirective", name: "span", attributes, children }) });
   }
   return { chain, code: Boolean(code) };
 }
@@ -194,7 +249,11 @@ function wrappersOf(node: AdfNode): { chain: Wrapper[]; code: boolean } {
 function leafToMdast(node: AdfNode, asDirective: boolean, code: boolean): PhrasingContent {
   if (node.type === "text") return code ? { type: "inlineCode", value: node.text ?? "" } : { type: "text", value: node.text ?? "" };
   if (node.type === "mediaInline") return placeholderOf(node);
+  const url = attrsOf(node).url;
+  if (node.type === "inlineCard" && Object.keys(attrsOf(node)).length === 1 && typeof url === "string" && AUTOLINK.test(url)) return raw(`<${url}>`);
   if (node.type === "hardBreak" && noAttrs(node) && !asDirective) return { type: "break" };
+  const dedicated = dedicatedToMdast(node);
+  if (dedicated) return dedicated as TextDirective;
   const attributes = directiveAttributes(node);
   const children = inlineToMdast(node.content ?? []);
   // An empty text child makes the writer emit `[]`, which keeps `:hardBreak:hardBreak` apart.
@@ -231,8 +290,8 @@ function inlineToMdast(nodes: AdfNode[], inHeading = false): PhrasingContent[] {
 const gfmWriter = gfmToMarkdown({ tablePipeAlign: false }).extensions!.slice(1);
 
 const writeOptions: ToMarkdownOptions = {
-  extensions: [...gfmWriter, directiveToMarkdown({ quote: "'" })],
-  handlers: { placeholder: writePlaceholder } as ToMarkdownOptions["handlers"],
+  extensions: [...gfmWriter, directiveToMarkdown({ quote: "'", preferUnquoted: true })],
+  handlers: { raw: writeRaw } as ToMarkdownOptions["handlers"],
   bullet: "-",
   emphasis: "_",
   strong: "*",
@@ -284,6 +343,45 @@ function directiveSpec(node: Directive): AdfNode | undefined {
   return Object.keys(attrs).length > 0 ? { type: node.name, attrs } : { type: node.name };
 }
 
+const plainText = (nodes: PhrasingContent[], ctx: Context): string =>
+  nodes.map((node) => (node.type === "textDirective" ? sourceOf(node, ctx) : "value" in node ? node.value : "children" in node ? plainText(node.children, ctx) : "")).join("");
+
+/** An edited label wins over a stale timestamp. */
+function dateNode(node: TextDirective, ctx: Context): AdfNode | undefined {
+  const label = plainText(node.children, ctx);
+  const { timestamp, ...other } = node.attributes ?? {};
+  const day = Date.parse(label);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(label) || Number.isNaN(day) || Object.keys(other).length > 0) return undefined;
+  const keep = typeof timestamp === "string" && /^\d{1,13}$/.test(timestamp) && isoDate(Number(timestamp)) === label;
+  return { type: "date", attrs: { timestamp: keep ? timestamp : String(day) } };
+}
+
+/** A dedicated directive reads its label and typed attributes; one that does not fit its spelling is not an ADF node. */
+function dedicatedNode(node: Directive, ctx: Context): AdfNode | undefined {
+  const attributes = node.attributes ?? {};
+  if (node.name === "date" && node.type === "textDirective" && !("adf" in attributes)) return dateNode(node, ctx);
+  const spec = DEDICATED.find(
+    (candidate) =>
+      candidate.name === node.name &&
+      !("adf" in attributes) &&
+      (candidate.block ? node.type === "leafDirective" : node.type === "textDirective") &&
+      Object.entries(candidate.variant ?? {}).every(([name, value]) => attributes[name] === value)
+  );
+  if (!spec) return undefined;
+  const names = Object.fromEntries(Object.keys(spec.attrs).map((name) => [markdownName(name), name]));
+  const attrs: Attrs = {};
+  const label = plainText(node.children as PhrasingContent[], ctx);
+  if (label) attrs[spec.label] = label;
+  for (const [name, value] of Object.entries(attributes)) {
+    if (spec.variant && name in spec.variant) continue;
+    const type = spec.attrs[names[name]];
+    const number = Number(value);
+    if (!type || typeof value !== "string" || (type === "number" && (value === "" || Number.isNaN(number)))) return undefined;
+    attrs[names[name]] = type === "number" ? number : value;
+  }
+  return Object.keys(attrs).length > 0 ? { type: spec.type, attrs } : undefined;
+}
+
 function finish(node: AdfNode): AdfNode {
   if (LOCAL_ID_NODES.has(node.type)) node.attrs = { localId: crypto.randomUUID(), ...node.attrs };
   return node;
@@ -297,6 +395,10 @@ function placeholderNode(url: string): AdfNode | null {
 function unknownDirective(node: Directive, ctx: Context): void {
   ctx.warnings.push(`line ${node.position?.start.line}: unknown directive "${node.name}" kept as text`);
 }
+
+/** `<url>` is an inlineCard; `[url](url)` stays a link mark. */
+const isAutolink = (node: Link, ctx: Context) =>
+  ctx.source[node.position?.start.offset ?? -1] === "<" && node.children.length === 1 && node.children[0].type === "text" && node.children[0].value === node.url;
 
 function inlineFromMdast(nodes: PhrasingContent[], marks: Mark[], ctx: Context): AdfNode[] {
   const out: AdfNode[] = [];
@@ -318,6 +420,10 @@ function inlineFromMdast(nodes: PhrasingContent[], marks: Mark[], ctx: Context):
         out.push(...textNode(node.value, withMark(marks, { type: "code" })));
         break;
       case "link": {
+        if (isAutolink(node, ctx)) {
+          out.push({ type: "inlineCard", attrs: { url: node.url }, ...(marks.length > 0 ? { marks } : {}) });
+          break;
+        }
         const attrs = { href: node.url, ...(node.title ? { title: node.title } : {}) };
         out.push(...inlineFromMdast(node.children, withMark(marks, { type: "link", attrs }), ctx));
         break;
@@ -341,14 +447,25 @@ function inlineFromMdast(nodes: PhrasingContent[], marks: Mark[], ctx: Context):
   return mergeText(out);
 }
 
+/** A span is `color`, `bg` and `underline` attributes, plus the generic `marks` JSON for every other mark. */
+function marksOfSpan(node: TextDirective): Mark[] | undefined {
+  const { color, bg, underline, marks, ...other } = node.attributes ?? {};
+  const generic = marks === undefined || marks === null ? [] : parseJson(marks);
+  if (Object.keys(other).length > 0 || !Array.isArray(generic)) return undefined;
+  const result: Mark[] = generic.filter((mark): mark is Mark => typeof mark?.type === "string");
+  if (color) result.push({ type: "textColor", attrs: { color } });
+  if (bg) result.push({ type: "backgroundColor", attrs: { color: bg } });
+  if (underline !== undefined && underline !== null) result.push({ type: "underline" });
+  return result.length > 0 ? result : undefined;
+}
+
 function inlineDirective(node: TextDirective, marks: Mark[], ctx: Context): AdfNode[] {
   if (node.name === "span") {
-    const spanMarks = parseJson(node.attributes?.marks);
-    if (Array.isArray(spanMarks)) {
-      const valid = spanMarks.filter((mark): mark is Mark => typeof mark?.type === "string");
-      return inlineFromMdast(node.children, valid.reduce(withMark, marks), ctx);
-    }
+    const spanMarks = marksOfSpan(node);
+    if (spanMarks) return inlineFromMdast(node.children, spanMarks.reduce(withMark, marks), ctx);
   } else {
+    const dedicated = dedicatedNode(node, ctx);
+    if (dedicated) return [{ ...dedicated, ...(marks.length > 0 ? { marks } : {}) }];
     const spec = directiveSpec(node);
     if (spec) {
       if (node.children.length > 0) spec.content = inlineFromMdast(node.children, [], ctx);
@@ -467,6 +584,8 @@ function directiveBlock(node: LeafDirective | ContainerDirective, ctx: Context):
     const marks = parseJson(node.attributes?.adf);
     if (Array.isArray(marks)) return blocksFromMdast(node.children, ctx).map((child) => ({ ...child, marks: [...(child.marks ?? []), ...marks] }));
   }
+  const dedicated = dedicatedNode(node, ctx);
+  if (dedicated) return [dedicated];
   const spec = directiveSpec(node);
   if (!spec) {
     unknownDirective(node, ctx);

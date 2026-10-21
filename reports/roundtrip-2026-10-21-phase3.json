@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-21",
+  "sources": {
+    "jira": {
+      "tested": 17985,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 83.03,
+      "idempotenceRate": 100,
+      "schemaValidRate": 100,
+      "originalSchemaValidRate": 100,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": []
+    },
+    "confluence": {
+      "tested": 300,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 11,
+      "idempotenceRate": 100,
+      "schemaValidRate": 92,
+      "originalSchemaValidRate": 92,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": []
+    },
+    "comments": {
+      "tested": 1016,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 76.08,
+      "idempotenceRate": 100,
+      "schemaValidRate": 100,
+      "originalSchemaValidRate": 100,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": []
+    }
+  },
+  "properties": {
+    "sampled": 500,
+    "checks": {
+      "noOpIdentity": {
+        "tested": 500,
+        "passed": 500,
+        "rate": 100,
+        "failures": []
+      },
+      "singleSentenceEdit": {
+        "tested": 408,
+        "passed": 408,
+        "rate": 100,
+        "failures": []
+      },
+      "guardQuietWhenKept": {
+        "tested": 408,
+        "passed": 408,
+        "rate": 100,
+        "failures": []
+      },
+      "deleteBlock": {
+        "tested": 224,
+        "passed": 224,
+        "rate": 100,
+        "failures": []
+      },
+      "insertBlock": {
+        "tested": 224,
+        "passed": 224,
+        "rate": 100,
+        "failures": []
+      },
+      "guardFiresWhenDropped:table": {
+        "tested": 47,
+        "passed": 47,
+        "rate": 100,
+        "failures": []
+      },
+      "guardFiresWhenDropped:panel": {
+        "tested": 17,
+        "passed": 17,
+        "rate": 100,
+        "failures": []
+      }
+    }
+  },
+  "seconds": 21.8
+}

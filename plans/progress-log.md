@@ -93,3 +93,30 @@ Decisions:
 - Dry-run does not abort on the guard; it reports it. A real write aborts unless `--force`.
 - Backups are `~/.cache/tik/backups/KEY/FIELD-TIMESTAMP.json` (`key`, `field`, `savedAt`, raw `adf`, edit `markdown`), written with exclusive create; a field without existing content has nothing to back up.
 - Flag docs (AGENTS.md, README.md, local skill) got the short version now, as CLAUDE.md requires; the full dialect reference stays in phase 7.
+
+## Phase 3: readable inline nodes (2026-10-21)
+
+`just verify-roundtrip` runs in 21 s. Report: `reports/roundtrip-2026-10-21-phase3.json`. Exact, idempotence, schema-valid and crashes did not move at any step (Jira 100% / 100% / 100% / 0; Confluence 100% / 100% / 92% (the originals' own rate) / 0; comments 100% / 100% / 100% / 0). The phase 2 property checks are unchanged (all 100%).
+
+Readable rate after each step (Jira 17,985 fields, Confluence 300, comments 1,016):
+
+| Step | Jira | Confluence | Comments |
+|---|---|---|---|
+| Phase 1 | 65.13% | 4.67% | 53.64% |
+| inlineCard as `<url>` | 78.47% | 5.00% | 57.09% |
+| emoji | 79.81% | 5.33% | 62.30% |
+| mention | 81.01% | 5.33% | 75.49% |
+| textColor, underline, backgroundColor spans | 82.55% | 7.00% | 75.79% |
+| blockCard, embedCard, status | 82.84% | 7.00% | 76.08% |
+| date | 83.03% | 11.00% | 76.08% |
+
+- Below the ~90% estimate. Every inline construct in scope is now readable; the rest of the Jira gap is what phases 4 and 5 replace, counted in fields: media placeholders 2,183, tables 619 (cells 153 and 134 more), task items 239, panels 70, headings with extra attributes 45 (`heading adf`, not in the plan), expand 14, other marks on spans (annotation) 5. Media alone is 12.1%.
+- inlineCard as an autolink is reliable, so `:card[url]` is not needed for inline cards. `<url>` is written for a card whose only attribute is a `url` that is a valid autolink (scheme, no whitespace, `<` or `>`); the reader takes a link whose source starts with `<` and whose text equals its url. `[url](url)` stays a link mark. Plain URL text never turns into a link because the reader has GFM autolink literals off.
+- A card with other attributes or a url that is not an autolink uses the generic rule.
+- Dedicated spellings (`DEDICATED` in `lib/adf-codec.ts`, a small table of node type, directive name, label attribute and typed attributes): `:emoji[:cross_mark:]{_id=… text=…}`, `:mention[@Jane Doe]{_id=…}`, `:status[IN QA]{color=blue style=bold}`, `::card[url]{appearance=block layout=center}` and `::card[url]{appearance=embed width=100 originalWidth=…}`. A node that has an attribute outside the table, an attribute of the wrong type or a multi-line value falls back to the generic rule, and a directive with an `adf` attribute always reads as generic.
+- `:date[2026-11-03]`: the label is the UTC day; `timestamp` is written only when it is not that day's midnight. If the label's day differs from `timestamp`, the label wins. A label that is not `YYYY-MM-DD` is text.
+- Spans: one `:span[x]{color=#ff5630 underline bg=#fdd0ec}` carries textColor, underline and backgroundColor; any other mark on the same text stays in the generic `marks='[…]'` attribute of the same span.
+- The writer uses `preferUnquoted`, so short values are written bare (`_id=557058:ab`); `&` in attribute values and in leaf labels is written as a character reference. `accessLevel: ""` is not written (it is the default; `DEFAULT_ATTRS` is now exported from `lib/adf-reconcile.ts`).
+- The placeholder writer became a generic `raw` mdast node (also used for `<url>`).
+- Checked beyond the corpus with a scratch loop (not committed): 7,500 documents with hostile strings (`]`, `&amp;`, quotes, backslashes, newlines, empty values, `:`, `<>`, `{}`) in every dedicated attribute and label all round-trip exactly.
+- `bun test`: 62 tests (5 new: inline atoms, spans, cards, date label wins, prose that resembles a directive; fuzz pieces extended). `just check` passes.

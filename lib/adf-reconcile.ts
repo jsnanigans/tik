@@ -4,7 +4,7 @@ type Mark = NonNullable<AdfNode["marks"]>[number];
 
 const MARK_ORDER = ["link", "strong", "em", "strike", "underline", "textColor", "backgroundColor", "subsup", "code"];
 
-const DEFAULT_ATTRS: Record<string, Record<string, unknown>> = {
+export const DEFAULT_ATTRS: Record<string, Record<string, unknown>> = {
   orderedList: { order: 1 },
   table: { isNumberColumnEnabled: false, layout: "default" },
   tableCell: { colspan: 1, rowspan: 1 },
