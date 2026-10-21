@@ -10,7 +10,35 @@
 - **Short flags**: citty parses `-s` and `-S` as the same key, so no command defines both. Sprint scoping is always the long flag `--current-sprint`.
 - **Rich text** (`-d`, `--ac`, `--ti`, comments) takes markdown, converted to Jira's ADF. A value that looks like a path (contains `/`, starts with `./` or `~/`, ends in `.md`/`.txt`/`.markdown`) and exists is read as a file; quote literal text that could be mistaken for one.
 - **Nothing is implicit**: `create` and `edit` only touch the fields you pass. Sprint, team, assignee and status are never defaulted.
-- **Dry runs**: `create` and `edit` accept `--dry-run` and print the computed fields without calling Jira.
+- **Dry runs**: `create` and `edit` accept `--dry-run` and print the computed fields without writing to Jira. For `-d`, `--ac`, `--ti` and `--replace` on an existing ticket, it reads the live field and prints a diff, the blocks that would change and the loss guard result.
+- **Editing existing rich text**: `edit -d/--ac/--ti` reads the live field, keeps every block you did not change as the original node, and sends nothing when nothing changed. Start from `tik view KEY --edit-md -d` (or `--ac`, `--ti`), which prints the exact markdown that `edit` reads back; the display markdown of `view -d` is lossy. The loss guard refuses the write when node types, marks or attributes of the original are missing from the result (`--force` overrides). Before writing, the previous ADF and its markdown are saved to `~/.cache/tik/backups/KEY/FIELD-TIMESTAMP.json`, and the write is refused if the ticket changed in Jira meanwhile.
+- **Editing comments and Confluence pages**: `comment KEY --edit ID` and `doc edit ID` use the same flow (reconcile with the live content, loss guard, backup, refusal if it changed meanwhile) and accept `--dry-run` and `--force`. `comment KEY --edit ID --edit-md` prints the comment as the exact markdown to edit and pass back with `-m FILE`; `doc edit` opens that markdown in `$EDITOR`. Backups of a page go to `~/.cache/tik/backups/confluence-ID/`, of a comment to `KEY/comment-ID-TIMESTAMP.json`.
+- **Restoring**: `tik restore KEY [--field description|acceptanceCriteria|testingInstructions|comment-ID] [--at TIMESTAMP] [--dry-run] [--force]` prints the diff between the live field and a backup, then writes the backup back through the edit flow (loss guard, a new backup of what it replaces). Without `--field` it uses the newest backup of any field; `--at` is a timestamp, or a prefix of one, from the backup's file name (`2026-10-21T10:15`). Pages (`confluence-ID`) are restored by hand: pass the backup's `markdown` to `tik doc edit`.
+
+## Rich text dialect
+
+The exact markdown of `view --edit-md` (and of `comment --edit ID --edit-md`, `doc edit`) is ordinary markdown plus `:name[label]{attrs}` directives. Every ADF construct has a spelling, so reading it back loses nothing. `localId`s are left out and restored on write. `view -d` is a lossy display form; do not edit it.
+
+| Content | Markdown |
+|---|---|
+| Paragraph, heading, quote, rule, lists (`3.` keeps the start number), code block | native; the code language is the info string, other attributes follow it as JSON (```` ```ts {"wrap":true} ````) |
+| Bold, italic, strike, code, link with title | `**x**`, `_x_`, `~~x~~`, `` `x` ``, `[x](url "title")` |
+| Hard break, empty paragraph | `\` at the end of a line (`:hardBreak[]` at the end of a block), `::paragraph` |
+| Inline card, block card, embed card | `<https://...>`, `::card[url]{appearance=block}`, `::card[url]{appearance=embed width=100}` |
+| Emoji, mention | `:emoji[:smile:]{_id=1f604 text=:smile:}`, `:mention[@Jane Doe]{_id=ACCOUNT_ID}` |
+| Status, date | `:status[IN QA]{color=blue}`, `:date[2026-11-03]` (the label wins over `timestamp`) |
+| Text color, underline, background, sub/superscript | `:span[x]{color=#ff5630 underline bg=#fdd0ec}`, `:span[x]{sup}`, `:span[x]{sub}` |
+| Inline comment (Confluence) | `:span[x]{annotation=ID}` (several: `annotation=ID1,ID2`) |
+| Table | GFM table; with attributes `:::table{layout=wide width=760 numbered colwidths=120,300}` around it; other tables `:::::table` / `::::row` / `:::cell{header colspan=2 bg=#e3fcef}` |
+| Task list | `- [ ] a`, `- [x] b`, `- [ ] :empty`; a nested list is indented under its item |
+| Panel, expand | `:::panel{type=info}` ... `:::`, `::::expand{title=More}` holding `:::nestedExpand{title=...}` |
+| Media | `::media[alt]{_id=ID type=file collection=c layout=center width=50}`, inline `:media{...}`, in a group `:::mediaGroup`; `![](tikmedia:...)` tokens are still read |
+| Layout, macro | `::::layout` with `:::column{width=50}`; `::macro{type=T key=K params='{json}'}`, `:::macro{...}` with a body, inline `:macro{...}` |
+| Alignment, indentation, breakout | `:::marks{align=center indent=2 breakout=wide}` ... `:::` |
+| Decision list | `:::decisions` holding bullets |
+| Anything else | `:::nodeType{adf='{json attrs}'}` (children inside), `:span[x]{marks='[json]'}` |
+
+Unknown directives, such as a typed `:D` or `:::note`, stay literal text and are reported as warnings. Markdown that has no valid ADF form is normalized with a warning. The reader never throws.
 
 ## Reading
 
@@ -19,7 +47,7 @@
 | `tik`, `tik sprint` | My tickets in the active sprint. `-a` all team, `-e` expand done, `-i` info only, `-g` goals, `--type`, `--grep`, `--team`, `--group-by team` |
 | `tik mine` | All my open tickets (`-e`, `--type`, `--grep`, `--team`, `--group-by team`) |
 | `tik prio` | P1/P2 tickets in the sprint |
-| `tik view [KEY]` | Details. `-d` description, `--ac`, `--ti`, `-A` all three |
+| `tik view [KEY]` | Details. `-d` description, `--ac`, `--ti`, `-A` all three; `--edit-md` with one of `-d`, `--ac`, `--ti` prints that live field as the exact markdown for `edit` |
 | `tik export [KEY]` | Full markdown copy fetched live: fields, links, attachments, description, AC, TI, comments, changelog |
 | `tik history [KEY]` | Changelog timeline |
 | `tik comments [KEY]` | Comments, bodies capped at 15 lines; `-f` full, `--md` raw markdown, `-n N` last N, `--author X`, `--no-bots`/`--bots`, `--json [--raw]` |
@@ -67,7 +95,7 @@ tik create "Summary" -p PROJ -t Task -d ./desc.md --ac "- criterion" --ti "1. st
   --priority 2 --points 3 -a -e --current-sprint -i
 tik edit PROJ-123 -s "New title" --add-label tech-debt
 tik edit PROJ-123 --sprint none --dry-run
-tik comment PROJ-123 "text"               # KEY is required with a message; -m FILE, --attach IMG, --edit ID, --rm ID,ID
+tik comment PROJ-123 "text"               # KEY is required with a message; -m FILE, --attach IMG, --edit ID [--edit-md] [--dry-run] [--force], --rm ID,ID
 tik start PROJ-123                        # -> In Progress
 tik review PROJ-123 --gate-ci             # -> review status; requires open, approved, green PR
 tik move PROJ-123 "Done"                  # also: tik transition KEY [STATUS] lists or applies
@@ -79,7 +107,7 @@ tik attach add|rm|embed ...
 
 `create` flags: `-p` project (default from config), `-t` type (default Task), `-d`, `-a` assign to me, `-e` your team, `--team NAME|ID` another team, `--current-sprint`, `--sprint ID`, `--priority`, `--points`, `--ac`, `--ti`, `-i` move to In Progress.
 
-`edit` flags: `-s`, `-d`, `-a me|none|ACCOUNT_ID`, `-p`/`--priority` (1-5 or name), `-e`, `--team NAME|ID`, `--current-sprint`, `--sprint ID|none`, `--points`, `--ac`, `--ti`, `--labels a,b`, `--add-label`, `--remove-label`, `--parent KEY|none`, `--status NAME|ID`. Invalid priority, sprint or points values abort the command.
+`edit` flags: `-s`, `-d`, `-a me|none|ACCOUNT_ID`, `-p`/`--priority` (1-5 or name), `-e`, `--team NAME|ID`, `--current-sprint`, `--sprint ID|none`, `--points`, `--ac`, `--ti`, `--labels a,b`, `--add-label`, `--remove-label`, `--parent KEY|none`, `--status NAME|ID`, `--replace "old=>new"` (repeatable; changes text inside one text run of the description, AC or TI, and aborts unless `old` matches exactly once and sits in a single run; not combinable with `-d`, `--ac`, `--ti`), `--force` (write despite the loss guard). Invalid priority, sprint or points values abort the command.
 
 Priority: 1 Highest, 2 High, 3 Medium, 4 Low, 5 Lowest.
 
@@ -105,7 +133,7 @@ PRs are matched to tickets by the key in the branch name. Repos come from `githu
 | `tik embed [sync]` | Embedding stats; `sync` embeds all pending chunks (full backfill; first run downloads the ~325 MB model) |
 | `tik triage [-a]` | Interactive bulk fill of type, sprint, points, team |
 | `tik users` | List and edit the user directory |
-| `tik doc view\|create\|edit\|search\|sync` | Confluence pages (`search -O` queries Confluence directly) |
+| `tik doc view\|create\|edit\|search\|sync` | Confluence pages (`search -O` queries Confluence directly; `edit` takes `--dry-run` and `--force`) |
 
 ## Configuration
 

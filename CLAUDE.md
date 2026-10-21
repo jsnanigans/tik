@@ -18,7 +18,7 @@ just install                # build and copy to ~/.local/bin
 just clear-cache            # drop the cached credentials
 ```
 
-There is no test suite. Verify changes with `--dry-run` (`create`, `edit`) and read-only commands.
+Only the ADF codec has tests (`bun test`; `just verify-roundtrip` measures it on the cache). Verify other changes with `--dry-run` (`create`, `edit`) and read-only commands.
 
 ## Layout
 
@@ -33,7 +33,9 @@ There is no test suite. Verify changes with `--dry-run` (`create`, `edit`) and r
   - `search.ts`, `hybrid-search.ts`, `fuzzy.ts`: MiniSearch index (persisted in `~/.cache/tik/`), RRF merge with vector results, excerpt highlighting.
   - `embeddings.ts`, `embed-sync.ts`: in-process EmbeddingGemma (transformers.js) embedder, issue chunking, and the pending-chunks pipeline.
   - `parser.ts`: raw Jira JSON to typed `IssueData`, `SprintData`, `CommentData`, `IssueLinkData`.
-  - `markdown.ts`: markdown to ADF (`markdownToAdf`), ADF and Jira wiki to markdown, `tikmedia:` image placeholders.
+  - `adf-codec.ts`: lossless codec on mdast (`adfToEditMarkdown`, `parseMarkdown`, `markdownToAdf`). Native markdown plus directives (`:name[label]{adf='…'}`) for everything else.
+  - `adf-reconcile.ts`: `canonicalize`, `equivalent`, `reconcile` (restores original nodes after an edit), `lostConstructs` (loss guard), `replaceInText` (`--replace`).
+  - `markdown.ts`: ADF (display) and Jira wiki to markdown, `tikmedia:` image placeholders.
   - `history.ts`, `timeline.ts`, `export.ts`: changelog parsing, timeline graph, `tik export` renderer.
   - `confluence.ts`: Confluence pages API for `tik doc`.
   - `terminal.ts`, `colors.ts`, `util.ts`: width and truncation, progress indicators, ANSI constants (`C`), git helpers, `readFileArg`, `PriorityMap`.

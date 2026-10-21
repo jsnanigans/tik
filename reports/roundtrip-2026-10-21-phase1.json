@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-21",
+  "sources": {
+    "jira": {
+      "tested": 17985,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 65.13,
+      "idempotenceRate": 100,
+      "schemaValidRate": 100,
+      "originalSchemaValidRate": 100,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": []
+    },
+    "confluence": {
+      "tested": 300,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 4.67,
+      "idempotenceRate": 100,
+      "schemaValidRate": 92,
+      "originalSchemaValidRate": 92,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": []
+    },
+    "comments": {
+      "tested": 1016,
+      "skipped": 0,
+      "exactRate": 100,
+      "readableRate": 53.64,
+      "idempotenceRate": 100,
+      "schemaValidRate": 100,
+      "originalSchemaValidRate": 100,
+      "crashes": 0,
+      "crashExamples": [],
+      "topDiffs": []
+    }
+  },
+  "seconds": 19
+}

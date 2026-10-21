@@ -35,6 +35,16 @@ import {
   getObj,
   getStr,
   markdownToAdf,
+  parseMarkdown,
+  adfToEditMarkdown,
+  reconcile,
+  lostConstructs,
+  replaceInText,
+  equivalent,
+  writeFieldBackup,
+  findFieldBackup,
+  unifiedDiff,
+  type AdfNode,
   jiraWikiToMarkdown,
   decodeMediaPlaceholder,
   makeMediaPlaceholder,
@@ -139,6 +149,7 @@ import {
   resolveSpaceId,
   resolveSpaceKey,
   getConfluencePage,
+  getConfluencePageAdf,
   createConfluencePage,
   updateConfluencePage,
   getPagesInSpace,
@@ -2983,6 +2994,132 @@ async function cmdBranch(creds: Credentials): Promise<void> {
   }
 }
 
+const RICH_TEXT_FIELDS = [
+  { name: "description", label: "description" },
+  { name: "acceptanceCriteria", label: "acceptance criteria" },
+  { name: "testingInstructions", label: "testing instructions" },
+] as const;
+type RichTextName = (typeof RICH_TEXT_FIELDS)[number]["name"];
+
+const richTextFieldId = (name: RichTextName): string => (name === "description" ? name : customFields[name]);
+
+type RichTextPlan<Name extends string = string> = {
+  name: Name;
+  label: string;
+  id: string;
+  original: AdfNode | null;
+  result: AdfNode;
+  unchanged: boolean;
+  changes: string[];
+  lost: string[];
+  warnings: string[];
+  diff: string;
+};
+
+async function fetchRichText(creds: Credentials, key: string, names: RichTextName[]) {
+  const ids = names.map(richTextFieldId).filter(Boolean);
+  const issue = (await jiraGet(creds, `/rest/api/3/issue/${key}?fields=${[...ids, "updated"].join(",")}`)) as {
+    fields?: Record<string, unknown>;
+  };
+  const doc = (name: RichTextName): AdfNode | null => {
+    const value = issue.fields?.[richTextFieldId(name)] as AdfNode | null | undefined;
+    return value?.type === "doc" && value.content?.length ? value : null;
+  };
+  return { updated: String(issue.fields?.updated ?? ""), doc };
+}
+
+function applyReplacements(originals: Map<RichTextName, AdfNode>, specs: string[]): Map<RichTextName, AdfNode> {
+  const docs = new Map(originals);
+  for (const spec of specs) {
+    const at = spec.indexOf("=>");
+    if (at <= 0) emitError("invalid_replace", `Invalid --replace '${spec}' (use "old=>new")`);
+    const [search, replacement] = [spec.slice(0, at), spec.slice(at + 2)];
+    const found = [...docs].map(([name, doc]) => ({ name, ...replaceInText(doc, search, replacement) }));
+    const count = found.reduce((sum, f) => sum + f.count, 0);
+    const where = found.filter((f) => f.count > 0).map((f) => f.name).join(", ");
+    if (found.some((f) => f.crossing > 0)) emitError("replace_split", `'${search}' also spans several text runs (marks), which --replace does not edit`);
+    if (count === 0) emitError("replace_not_found", `'${search}' not found in any text run`);
+    if (count > 1) emitError("replace_ambiguous", `'${search}' found ${count} times (${where}); make it unique`);
+    for (const f of found) docs.set(f.name, f.doc);
+  }
+  return docs;
+}
+
+/** Reconciles `edited` with the live `original` and works out the diff and the loss guard. */
+function planRichText<Name extends string>(field: Pick<RichTextPlan<Name>, "name" | "label" | "id">, original: AdfNode | null, edited: AdfNode, warnings: string[] = []): RichTextPlan<Name> {
+  const { doc: result, changes } = original ? reconcile(original, edited) : { doc: edited, changes: ["new content"] };
+  return {
+    ...field,
+    original,
+    result,
+    unchanged: original !== null && equivalent(original, result),
+    changes,
+    lost: original ? lostConstructs(original, result) : [],
+    warnings,
+    diff: unifiedDiff(adfToEditMarkdown(original), adfToEditMarkdown(result)),
+  };
+}
+
+function printRichTextPlan(plan: RichTextPlan): void {
+  if (plan.unchanged) {
+    out(`${C.bold}${plan.label}${C.reset} ${C.dim}unchanged, nothing would be sent${C.reset}`);
+    return;
+  }
+  out(`${C.bold}${plan.label}${C.reset}`);
+  for (const change of plan.changes) out(`  ${C.dim}block ${change}${C.reset}`);
+  out(plan.diff.split("\n").map((line) => `  ${line}`).join("\n"));
+  if (plan.lost.length === 0) out(`  ${C.dim}Loss guard: nothing lost${C.reset}`);
+  else out(`  ${C.yellow}Loss guard: would refuse without --force; missing from the result: ${plan.lost.join(", ")}${C.reset}`);
+}
+
+const richTextReport = ({ name, unchanged, changes, lost, diff }: RichTextPlan) => ({ field: name, unchanged, changes, lost, diff });
+
+function refuseLoss(blocked: RichTextPlan[], hint: string): void {
+  if (blocked.length === 0) return;
+  emitError("loss_guard", `Refusing to write: ${blocked.map((plan) => `${plan.label} would lose ${plan.lost.join(", ")}`).join("; ")}. Use --force to write anyway, or ${hint}.`, {
+    lost: Object.fromEntries(blocked.map((plan) => [plan.name, plan.lost])),
+  });
+}
+
+/** Saves the field before it is replaced; without the backup nothing is written. */
+function backupOrAbort(key: string, field: string, original: AdfNode | null): void {
+  if (!original) return;
+  try {
+    writeFieldBackup(key, field, original);
+  } catch (err) {
+    emitError("backup_failed", `Could not write the backup, nothing was changed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function planRichTextEdits(
+  creds: Credentials,
+  key: string,
+  inputs: Partial<Record<RichTextName, string>>,
+  replacements: string[]
+): Promise<{ plans: RichTextPlan<RichTextName>[]; updated: string }> {
+  const fields = RICH_TEXT_FIELDS.filter(({ name }) => (replacements.length > 0 ? richTextFieldId(name) : inputs[name] !== undefined));
+  const live = await fetchRichText(creds, key, fields.map((f) => f.name));
+  const originals = new Map(fields.flatMap(({ name }) => (live.doc(name) ? [[name, live.doc(name)!] as const] : [])));
+  const replaced = replacements.length > 0 ? applyReplacements(originals, replacements) : undefined;
+
+  const plans: RichTextPlan<RichTextName>[] = [];
+  for (const { name, label } of fields) {
+    const original = live.doc(name);
+    if (replaced && !original) continue;
+    const warnings: string[] = [];
+    let edited: AdfNode;
+    if (replaced) {
+      edited = replaced.get(name)!;
+    } else {
+      const parsed = parseMarkdown(await readFileArg(inputs[name]!));
+      edited = parsed.doc;
+      warnings.push(...parsed.warnings.map((w) => `${label}: ${w}`));
+    }
+    plans.push(planRichText({ name, label, id: richTextFieldId(name) }, original, edited, warnings));
+  }
+  return { plans, updated: live.updated };
+}
+
 async function cmdEdit(creds: Credentials, key: string, options: {
   summary?: string;
   description?: string;
@@ -2999,7 +3136,10 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   addLabel?: string;
   removeLabel?: string;
   status?: string;
+  replace?: string[];
+  force?: boolean;
   dryRun?: boolean;
+  showDiff?: boolean;
 }): Promise<void> {
   const fields: Record<string, unknown> = {};
   const changes: string[] = [];
@@ -3009,13 +3149,6 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     const summary = await readFileArg(options.summary);
     fields.summary = summary.trim().split("\n")[0];
     changes.push(`summary → "${truncate(summary, 40)}"`);
-  }
-
-  if (options.description) {
-    const description = await readFileArg(options.description);
-    fields.description = markdownToAdf(description);
-    const isFile = description !== options.description;
-    changes.push(isFile ? `description → from ${options.description}` : `description → "${truncate(description, 30)}"`);
   }
 
   if (options.assignee) {
@@ -3089,19 +3222,35 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     changes.push(`points → ${pts}`);
   }
 
+  const richTextInputs: Partial<Record<RichTextName, string>> = {};
+  if (options.description) richTextInputs.description = options.description;
   if (options.acceptanceCriteria) {
-    const ac = await readFileArg(options.acceptanceCriteria);
-    fields[requireCustomField("acceptanceCriteria")] = markdownToAdf(ac);
-    const isFile = ac !== options.acceptanceCriteria;
-    changes.push(isFile ? `acceptance criteria → from ${options.acceptanceCriteria}` : `acceptance criteria → "${truncate(ac, 30)}"`);
+    requireCustomField("acceptanceCriteria");
+    richTextInputs.acceptanceCriteria = options.acceptanceCriteria;
+  }
+  if (options.testingInstructions) {
+    requireCustomField("testingInstructions");
+    richTextInputs.testingInstructions = options.testingInstructions;
+  }
+  const replacements = options.replace ?? [];
+  if (replacements.length > 0 && Object.keys(richTextInputs).length > 0) {
+    emitError("replace_conflict", "--replace cannot be combined with -d, --ac or --ti");
   }
 
-  if (options.testingInstructions) {
-    const ti = await readFileArg(options.testingInstructions);
-    fields[requireCustomField("testingInstructions")] = markdownToAdf(ti);
-    const isFile = ti !== options.testingInstructions;
-    changes.push(isFile ? `testing instructions → from ${options.testingInstructions}` : `testing instructions → "${truncate(ti, 30)}"`);
+  let plans: RichTextPlan<RichTextName>[] = [];
+  let liveUpdated = "";
+  if (replacements.length > 0 || Object.keys(richTextInputs).length > 0) {
+    if (globalFormat === "table") showLoading(`Reading ${key}...`);
+    ({ plans, updated: liveUpdated } = await planRichTextEdits(creds, key, richTextInputs, replacements));
+    if (globalFormat === "table") clearLoading();
   }
+  const warnings = plans.flatMap((plan) => plan.warnings);
+  const changedPlans = plans.filter((plan) => !plan.unchanged);
+  for (const plan of changedPlans) {
+    fields[plan.id] = plan.result;
+    changes.push(`${plan.label} → ${plan.original ? `${plan.changes.length} block change(s)` : "new content"}`);
+  }
+  const lossBlocked = changedPlans.filter((plan) => plan.lost.length > 0 && !options.force);
 
   if (options.labels) {
     const labelList = options.labels.split(",").map(l => l.trim()).filter(Boolean);
@@ -3123,12 +3272,18 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   }
   if (labelOps.length > 0) update.labels = labelOps;
 
+  if (Object.keys(fields).length === 0 && Object.keys(update).length === 0 && !options.status && plans.length > 0) {
+    if (globalFormat === "json") out(JSON.stringify({ key, changes: [], unchanged: plans.map((plan) => plan.name), warnings }, null, 2));
+    else out(`${C.green}✓${C.reset} No changes to ${formatProjectKey(key)}`);
+    return;
+  }
+
   if (Object.keys(fields).length === 0 && Object.keys(update).length === 0 && !options.status) {
     out(`${C.yellow}No changes specified${C.reset}`);
     out();
     out(`Usage: tik edit <KEY> [options]`);
     out(`  -s, --summary     New summary/title (or path to file)`);
-    out(`  -d, --desc        New description (or path to .md file)`);
+    out(`  -d, --desc        Description markdown (or path to .md file); replaces the field, unchanged blocks stay as they are`);
     out(`  -a, --assignee    Assignee (accountId, "me", or "none")`);
     out(`  --parent          Parent ticket key, or "none" to remove`);
     out(`  -p, --priority    Priority (1-5 or name)`);
@@ -3137,8 +3292,10 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     out(`  --current-sprint  Add to current sprint`);
     out(`  --sprint <id>     Add to specific sprint, or "none" to remove`);
     out(`  --points          Story points`);
-    out(`  --ac              Acceptance criteria (or path to .md file)`);
-    out(`  --ti              Testing instructions (or path to .md file)`);
+    out(`  --ac              Acceptance criteria markdown (or path to .md file)`);
+    out(`  --ti              Testing instructions markdown (or path to .md file)`);
+    out(`  --replace         Replace text inside one text run, "old=>new" (repeatable)`);
+    out(`  --force           Write even when the loss guard reports lost constructs`);
     out(`  --labels          Set labels (comma-separated)`);
     out(`  --add-label       Add a label`);
     out(`  --remove-label    Remove a label`);
@@ -3171,7 +3328,8 @@ async function cmdEdit(creds: Credentials, key: string, options: {
   }
 
   if (options.dryRun) {
-    const payload = { dryRun: true, action: "edit", fields, update, changes, transition: foundTransition ?? null };
+    const richText = plans.map(richTextReport);
+    const payload = { dryRun: true, action: "edit", fields, update, changes, richText, warnings, transition: foundTransition ?? null };
     if (globalFormat === "json") {
       out(JSON.stringify(payload, null, 2));
       return;
@@ -3179,7 +3337,21 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     out(`${C.yellow}Dry run — would apply:${C.reset}`);
     for (const c of changes) out(`  ${c}`);
     if (foundTransition) out(`  ${C.dim}Transition to:${C.reset} ${foundTransition.name}`);
+    for (const plan of plans) {
+      out();
+      printRichTextPlan(plan);
+    }
+    for (const warning of warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
     return;
+  }
+
+  if (options.showDiff && globalFormat === "table") for (const plan of changedPlans) printRichTextPlan(plan);
+  refuseLoss(lossBlocked, `edit from 'tik view ${key} --edit-md'`);
+
+  if (changedPlans.length > 0) {
+    for (const plan of changedPlans) backupOrAbort(key, plan.name, plan.original);
+    const current = await fetchRichText(creds, key, []);
+    if (current.updated !== liveUpdated) emitError("changed_in_jira", `${key} was updated in Jira while editing; run the command again`);
   }
 
   if (hasFieldChanges) {
@@ -3215,14 +3387,89 @@ async function cmdEdit(creds: Credentials, key: string, options: {
     changes.push(`status → ${foundTransition.name}`);
   }
 
+  if (changedPlans.length > 0) {
+    const stored = await fetchRichText(creds, key, changedPlans.map((plan) => plan.name));
+    for (const plan of changedPlans) {
+      const saved = stored.doc(plan.name);
+      if (!saved || !equivalent(saved, plan.result)) warnings.push(`${plan.label}: Jira stored a different version than was sent`);
+    }
+  }
+
   if (globalFormat === "json") {
-    out(JSON.stringify({ key, changes }, null, 2));
+    out(JSON.stringify({ key, changes, ...(warnings.length > 0 ? { warnings } : {}) }, null, 2));
     return;
   }
   out(`${C.green}✓${C.reset} Updated ${formatProjectKey(key)}`);
   for (const change of changes) {
     out(`  ${C.dim}${change}${C.reset}`);
   }
+  for (const warning of warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
+}
+
+async function fetchComment(creds: Credentials, key: string, id: string) {
+  const comment = (await jiraGet(creds, `/rest/api/3/issue/${key}/comment/${id}`)) as { body?: AdfNode; updated?: string };
+  const doc = comment.body?.type === "doc" && comment.body.content?.length ? comment.body : null;
+  return { doc, updated: String(comment.updated ?? "") };
+}
+
+/** The same flow as a rich-text field of a ticket: reconcile with the live comment, guard, back up, check it did not change, write, read back. */
+async function cmdEditComment(creds: Credentials, key: string, id: string, markdown: string, options: { force?: boolean; dryRun?: boolean; showDiff?: boolean }): Promise<void> {
+  if (globalFormat === "table") showLoading(`Reading comment ${id}...`);
+  const live = await fetchComment(creds, key, id);
+  if (globalFormat === "table") clearLoading();
+  const parsed = parseMarkdown(markdown);
+  const plan = planRichText({ name: `comment ${id}`, label: `comment ${id}`, id }, live.doc, parsed.doc, parsed.warnings);
+  const warnings = [...plan.warnings];
+
+  if (options.dryRun) {
+    if (globalFormat === "json") {
+      out(JSON.stringify({ dryRun: true, action: "comment-edit", key, ...richTextReport(plan), warnings }, null, 2));
+      return;
+    }
+    out(`${C.yellow}Dry run — would apply:${C.reset}`);
+    printRichTextPlan(plan);
+    for (const warning of warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
+    return;
+  }
+
+  if (plan.unchanged) {
+    if (globalFormat === "json") out(JSON.stringify({ key, comment: id, changes: [], warnings }, null, 2));
+    else out(`${C.green}✓${C.reset} No changes to comment ${id} on ${formatProjectKey(key)}`);
+    return;
+  }
+  if (options.showDiff && globalFormat === "table") printRichTextPlan(plan);
+  if (!options.force) refuseLoss(plan.lost.length > 0 ? [plan] : [], `edit from 'tik comment ${key} --edit ${id} --edit-md'`);
+  backupOrAbort(key, `comment-${id}`, plan.original);
+  if ((await fetchComment(creds, key, id)).updated !== live.updated) emitError("changed_in_jira", `Comment ${id} was updated in Jira while editing; run the command again`);
+
+  const res = await jiraPut(creds, `/rest/api/3/issue/${key}/comment/${id}`, { body: plan.result });
+  if (!res.ok) emitError("comment_update_failed", `Error updating comment ${id}: ${res.error}`);
+  const stored = (await fetchComment(creds, key, id)).doc;
+  if (!stored || !equivalent(stored, plan.result)) warnings.push(`comment ${id}: Jira stored a different version than was sent`);
+
+  if (globalFormat === "json") {
+    out(JSON.stringify({ key, comment: id, changes: plan.changes, ...(warnings.length > 0 ? { warnings } : {}) }, null, 2));
+    return;
+  }
+  out(`${C.green}✓${C.reset} Updated comment ${id} on ${formatProjectKey(key)}`);
+  for (const warning of warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
+}
+
+/** Writes a backup back through the edit flow of its field, printing the diff first. */
+async function cmdRestore(creds: Credentials, key: string, options: { field?: string; at?: string; force?: boolean; dryRun?: boolean }): Promise<void> {
+  let backup: ReturnType<typeof findFieldBackup>;
+  try {
+    backup = findFieldBackup(key, options.field, options.at);
+  } catch (err) {
+    emitError("no_backup", err instanceof Error ? err.message : String(err));
+  }
+  const markdown = adfToEditMarkdown(backup.adf);
+  const flow = { force: options.force, dryRun: options.dryRun, showDiff: true };
+  if (globalFormat === "table") out(`${C.dim}Restoring ${backup.field} of ${key} from ${backup.path}${C.reset}`);
+  const commentId = backup.field.match(/^comment-(.+)$/)?.[1];
+  if (commentId) await cmdEditComment(creds, key, commentId, markdown, flow);
+  else if (RICH_TEXT_FIELDS.some((f) => f.name === backup.field)) await cmdEdit(creds, key, { [backup.field]: markdown, ...flow });
+  else emitError("restore_unsupported", `Cannot restore ${backup.field} (${backup.path}); copy its markdown into an edit by hand`);
 }
 
 async function cmdTransition(creds: Credentials, args: string[]): Promise<void> {
@@ -3952,11 +4199,22 @@ const main = defineCommand({
         ac: { type: "boolean", description: "Show acceptance criteria" },
         ti: { type: "boolean", description: "Show testing instructions" },
         A: { type: "boolean", alias: "all", description: "Show description, AC, and TI" },
+        "edit-md": { type: "boolean", description: "Print the live -d, --ac or --ti as the exact markdown that edit reads back" },
       },
       run: async ({ args }) => {
         subCommandExecuted = true;
         applyFormat(args);
         const creds = await getCredentials(args);
+
+        if (args["edit-md"]) {
+          const requested = { description: args.d, acceptanceCriteria: args.ac, testingInstructions: args.ti };
+          const names = RICH_TEXT_FIELDS.map((f) => f.name).filter((name) => requested[name]);
+          if (names.length !== 1) emitError("edit_md_field", "--edit-md needs exactly one of -d, --ac or --ti");
+          const key = await requireTicket(typeof args.key === "string" ? [args.key] : []);
+          const markdown = adfToEditMarkdown((await fetchRichText(creds, key, names)).doc(names[0]));
+          out(globalFormat === "json" ? JSON.stringify({ key, field: names[0], markdown }, null, 2) : markdown);
+          return;
+        }
 
         const showAll = !!args.A;
         const opts: FormatIssueOpts = {
@@ -4444,13 +4702,26 @@ const main = defineCommand({
         attach: { type: "string", description: "Upload and inline-embed an image file in the comment" },
         "attach-width": { type: "string", alias: "W", description: "Display width as % of column (1-100, e.g. 50 for half-width)" },
         rm: { type: "string", description: "Delete comment(s) by id, comma-separated" },
-        edit: { type: "string", description: "Edit an existing comment in place by id" },
+        edit: { type: "string", description: "Edit an existing comment in place by id; unchanged blocks stay as they are" },
+        "edit-md": { type: "boolean", description: "With --edit, print the comment's exact edit markdown instead of editing" },
+        force: { type: "boolean", description: "With --edit, write even when the loss guard reports constructs missing from the result" },
+        "dry-run": { type: "boolean", description: "With --edit, print the diff and the loss guard result without writing" },
       },
       run: async ({ args }) => {
         subCommandExecuted = true;
         applyFormat(args);
         const creds = await getCredentials(args);
         const key = await requireTicket(typeof args.key === "string" ? [args.key] : []);
+        const editId = typeof args.edit === "string" ? args.edit : undefined;
+        if (args["dry-run"] && (!editId || typeof args.attach === "string")) {
+          emitError("dry_run_unsupported", "--dry-run works with --edit, without --attach");
+        }
+        if (args["edit-md"]) {
+          if (!editId) emitError("edit_md_comment", "--edit-md needs --edit <id>");
+          const markdown = adfToEditMarkdown((await fetchComment(creds, key, editId)).doc);
+          out(globalFormat === "json" ? JSON.stringify({ key, comment: editId, markdown }, null, 2) : markdown);
+          return;
+        }
 
         // Delete mode: tik comment KEY --rm <id[,id...]>
         if (typeof args.rm === "string") {
@@ -4549,22 +4820,14 @@ const main = defineCommand({
           fullBody = body;
         }
 
-        const adf = markdownToAdf(fullBody);
-        if (typeof args.edit === "string") {
-          showLoading(`Updating comment ${args.edit} on ${key}...`);
-          const res = await jiraPut(creds, `/rest/api/3/issue/${key}/comment/${args.edit}`, { body: adf });
-          clearLoading();
-          if (!res.ok) {
-            console.error(`Error updating comment ${args.edit}: ${res.error}`);
-            process.exit(1);
-          }
-          out(`${C.green}✓${C.reset} Updated comment ${args.edit} on ${formatProjectKey(key)}`);
-        } else {
-          showLoading(`Adding comment to ${key}...`);
-          await jiraPost(creds, `/rest/api/3/issue/${key}/comment`, { body: adf });
-          clearLoading();
-          out(`${C.green}✓${C.reset} Added comment to ${formatProjectKey(key)}`);
+        if (editId) {
+          await cmdEditComment(creds, key, editId, fullBody, { force: !!args.force, dryRun: !!args["dry-run"] });
+          return;
         }
+        showLoading(`Adding comment to ${key}...`);
+        await jiraPost(creds, `/rest/api/3/issue/${key}/comment`, { body: markdownToAdf(fullBody) });
+        clearLoading();
+        out(`${C.green}✓${C.reset} Added comment to ${formatProjectKey(key)}`);
       },
     }),
     comments: defineCommand({
@@ -5021,7 +5284,7 @@ const main = defineCommand({
       args: {
         key: { type: "positional", required: false, description: "Ticket key (or from branch)" },
         s: { type: "string", alias: "summary", description: "New summary/title (or path to file)" },
-        d: { type: "string", alias: "desc", description: "New description with markdown (or path to .md file)" },
+        d: { type: "string", alias: "desc", description: "Description markdown (or path to .md file); replaces the field, unchanged blocks stay as they are" },
         a: { type: "string", alias: "assignee", description: 'Assignee (accountId, "me", or "none")' },
         p: { type: "string", alias: "priority", description: "Priority (1-5 or name)" },
         e: { type: "boolean", description: "Assign to your team (myTeamId)" },
@@ -5029,8 +5292,10 @@ const main = defineCommand({
         "current-sprint": { type: "boolean", description: "Add to current sprint" },
         sprint: { type: "string", description: 'Sprint ID, or "none" to remove' },
         points: { type: "string", description: "Story points" },
-        ac: { type: "string", description: "Acceptance criteria with markdown (or path to .md file)" },
-        ti: { type: "string", description: "Testing instructions with markdown (or path to .md file)" },
+        ac: { type: "string", description: "Acceptance criteria markdown (or path to .md file); replaces the field, unchanged blocks stay as they are" },
+        ti: { type: "string", description: "Testing instructions markdown (or path to .md file); replaces the field, unchanged blocks stay as they are" },
+        replace: { type: "string", description: 'Replace text inside one text run, "old=>new" (repeatable; must match exactly once in description, AC and TI)' },
+        force: { type: "boolean", description: "Write even when the loss guard reports constructs missing from the result" },
         labels: { type: "string", description: "Set labels (comma-separated)" },
         "add-label": { type: "string", description: "Add a label" },
         "remove-label": { type: "string", description: "Remove a label" },
@@ -5062,6 +5327,30 @@ const main = defineCommand({
           addLabel: typeof args["add-label"] === "string" ? args["add-label"] : undefined,
           removeLabel: typeof args["remove-label"] === "string" ? args["remove-label"] : undefined,
           status: typeof args.status === "string" ? args.status : undefined,
+          replace: [args.replace].flat().filter((r): r is string => typeof r === "string"),
+          force: !!args.force,
+          dryRun: !!args["dry-run"],
+        });
+      },
+    }),
+    restore: defineCommand({
+      meta: { description: "Write a saved backup of a description, AC, TI or comment back to a ticket" },
+      args: {
+        key: { type: "positional", required: false, description: "Ticket key (or from branch)" },
+        field: { type: "string", description: "description, acceptanceCriteria, testingInstructions or comment-<id> (default: the newest backup of any field)" },
+        at: { type: "string", description: "Timestamp or prefix of the backup's file name (default: the newest)" },
+        force: { type: "boolean", description: "Write even when the loss guard reports constructs missing from the result" },
+        "dry-run": { type: "boolean", description: "Print the diff and the loss guard result without writing" },
+      },
+      run: async ({ args }) => {
+        subCommandExecuted = true;
+        applyFormat(args);
+        const creds = await getCredentials(args);
+        const key = await requireTicket(typeof args.key === "string" ? [args.key] : []);
+        await cmdRestore(creds, key, {
+          field: typeof args.field === "string" ? args.field : undefined,
+          at: typeof args.at === "string" ? args.at : undefined,
+          force: !!args.force,
           dryRun: !!args["dry-run"],
         });
       },
@@ -5642,28 +5931,32 @@ const main = defineCommand({
           },
         }),
         edit: defineCommand({
-          meta: { description: "Edit a Confluence page interactively" },
+          meta: { description: "Edit a Confluence page interactively; unchanged blocks stay as they are" },
           args: {
             id: { type: "positional", required: true, description: "Page ID" },
+            force: { type: "boolean", description: "Write even when the loss guard reports constructs missing from the result" },
+            "dry-run": { type: "boolean", description: "Print the diff and the loss guard result without writing" },
           },
           run: async ({ args }) => {
             subCommandExecuted = true;
             applyFormat(args);
             const creds = await getCredentials(args);
             const pageId = String(args.id);
-            
+
             showLoading("Fetching page details...");
-            let page: any;
+            let live: Awaited<ReturnType<typeof getConfluencePageAdf>>;
             try {
-              page = await getConfluencePage(creds, pageId, { preserveUnknown: true });
+              live = await getConfluencePageAdf(creds, pageId);
             } finally {
               clearLoading();
             }
-            
-            const originalBody = page.body || "";
+            const { page } = live;
+            const original = live.adf?.type === "doc" && live.adf.content?.length ? live.adf : null;
+
+            const originalBody = adfToEditMarkdown(original);
             const tempFilePath = `/tmp/tik-doc-${pageId}.md`;
             await Bun.write(tempFilePath, originalBody);
-            
+
             const editor = (process.env.EDITOR || "nano").trim().split(/\s+/);
             const proc = Bun.spawn([...editor, tempFilePath], {
               stdin: "inherit",
@@ -5671,27 +5964,42 @@ const main = defineCommand({
               stderr: "inherit",
             });
             await proc.exited;
-            
-            const updatedBody = await Bun.file(tempFilePath).text();
-            if (updatedBody === originalBody) {
+
+            const parsed = parseMarkdown(await Bun.file(tempFilePath).text());
+            const plan = planRichText({ name: "body", label: `page ${pageId}`, id: pageId }, original, parsed.doc, parsed.warnings);
+            if (plan.unchanged) {
               out(`${C.yellow}No changes detected. Page not updated.${C.reset}`);
               return;
             }
-            
+            if (args["dry-run"]) {
+              out(`${C.yellow}Dry run — would apply:${C.reset}`);
+              printRichTextPlan(plan);
+              for (const warning of plan.warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
+              return;
+            }
+            if (!args.force) refuseLoss(plan.lost.length > 0 ? [plan] : [], "edit the page again without removing them");
+            backupOrAbort(`confluence-${pageId}`, "body", original);
+
+            if ((await getConfluencePage(creds, pageId)).version !== page.version) {
+              emitError("changed_in_confluence", `Page ${pageId} was updated in Confluence while editing; run the command again`);
+            }
             showLoading("Updating page on Confluence...");
             try {
               const updatedPage = await updateConfluencePage(creds, pageId, {
                 title: page.title,
-                markdown: updatedBody,
+                adf: plan.result,
                 currentVersion: page.version,
               });
               const spaceKey = await resolveSpaceKey(creds, updatedPage.spaceId);
               updatedPage.spaceKey = spaceKey || null;
               cachePages([updatedPage]);
-              
+              const stored = (await getConfluencePageAdf(creds, pageId)).adf;
+
               out(`${C.green}Updated Confluence page successfully!${C.reset}`);
               out(`ID: ${updatedPage.id}`);
               out(`Version: ${updatedPage.version}`);
+              for (const warning of plan.warnings) out(`${C.yellow}⚠${C.reset} ${warning}`);
+              if (!stored || !equivalent(stored, plan.result)) out(`${C.yellow}⚠${C.reset} Confluence stored a different version than was sent`);
             } finally {
               clearLoading();
             }

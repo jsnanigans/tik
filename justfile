@@ -33,3 +33,7 @@ size: build
 # Clear credential cache
 clear-cache:
     rm -f /tmp/tik-creds-$(id -u)
+
+# Round-trip every cached rich-text field through the markdown codec
+verify-roundtrip *args:
+    bun run eval/roundtrip.ts {{args}}
