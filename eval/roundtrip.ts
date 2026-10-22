@@ -1,12 +1,10 @@
-import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "fs";
-import { homedir } from "os";
+import { mkdirSync } from "fs";
 import Ajv from "ajv";
 import { constructs, equivalent, reconcile } from "../lib/adf-reconcile";
-import { customFields } from "../lib/config";
 import { adfToEditMarkdown, markdownToAdf } from "../lib/adf-codec";
 import type { AdfNode } from "../lib/markdown";
 import { checkProperties } from "./properties";
+import { commentFields, confluenceFields, jiraFields, type Field } from "./fields";
 
 const toMarkdown = adfToEditMarkdown;
 const toAdf = markdownToAdf;
@@ -17,31 +15,7 @@ const genericUses = (markdown: string) => [...new Set([...markdown.matchAll(GENE
 const TOP_DIFFS = 15;
 const CRASH_EXAMPLES = 5;
 
-type Field = { label: string; adf: AdfNode };
 type Outcome = { exact: boolean; readable: boolean; idempotent: boolean; valid: boolean; noOp: boolean; crash?: string; diffs: string[]; generic: string[] };
-
-const cacheDir = `${homedir()}/.cache/tik`;
-
-function* jiraFields(): Generator<Field> {
-  const db = new Database(`file:${cacheDir}/tickets.db?immutable=1`, { readonly: true });
-  const names = {
-    description: "description",
-    acceptanceCriteria: customFields.acceptanceCriteria,
-    testingInstructions: customFields.testingInstructions,
-  };
-  for (const row of db.query<{ key: string; raw: string }, []>("SELECT key, raw FROM issues WHERE raw IS NOT NULL").iterate()) {
-    const fields = JSON.parse(row.raw).fields ?? {};
-    for (const [name, id] of Object.entries(names)) {
-      if (id && fields[id]?.type === "doc") yield { label: `${row.key} ${name}`, adf: fields[id] };
-    }
-  }
-}
-
-async function sampleFields(file: string, label: (item: any) => string): Promise<Field[] | null> {
-  const path = `${cacheDir}/eval/${file}`;
-  if (!existsSync(path)) return null;
-  return (await Bun.file(path).json()).map((item: any) => ({ label: label(item), adf: item.adf }));
-}
 
 const ajv = new Ajv({ schemaId: "auto", extendRefs: true });
 ajv.addMetaSchema(await Bun.file(require.resolve("ajv/lib/refs/json-schema-draft-04.json")).json());
@@ -136,8 +110,8 @@ function evaluate(fields: Iterable<Field>) {
 const started = performance.now();
 const sources: Record<string, Iterable<Field> | null> = {
   jira: jiraFields(),
-  confluence: await sampleFields("confluence.json", (page) => `confluence ${page.id}`),
-  comments: await sampleFields("comments.json", (comment) => `${comment.key} comment ${comment.id}`),
+  confluence: await confluenceFields(),
+  comments: await commentFields(),
 };
 
 const report: Record<string, unknown> = { date: new Date().toISOString().slice(0, 10), sources: {} };
@@ -158,7 +132,7 @@ for (const [name, fields] of Object.entries(sources)) {
   for (const use of result.genericUses) console.log(`  ${String(use.fields).padStart(6)}  generic ${use.construct}  (${use.example})`);
 }
 
-const sampleSources = [...jiraFields(), ...((await sampleFields("confluence.json", (page) => `confluence ${page.id}`)) ?? []), ...((await sampleFields("comments.json", (comment) => `${comment.key} comment ${comment.id}`)) ?? [])];
+const sampleSources = [...jiraFields(), ...((await confluenceFields()) ?? []), ...((await commentFields()) ?? [])];
 const properties = checkProperties(sampleSources.filter((field) => field.adf?.type === "doc"));
 report.properties = properties;
 console.log(`properties (sample of ${properties.sampled}):`);

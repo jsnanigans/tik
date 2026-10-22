@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { adfToEditMarkdown, markdownToAdf, parseMarkdown } from "./adf-codec";
+import { adfToEditMarkdown, directiveInfo, markdownToAdf, markdownToMdast, parseMarkdown } from "./adf-codec";
 import { equivalent } from "./adf-reconcile";
 import { encodePlaceholder, type AdfNode } from "./markdown";
 
@@ -297,5 +297,27 @@ describe("fuzz", () => {
       const twice = markdownToAdf(adfToEditMarkdown(once));
       if (!equivalent(once, twice)) throw new Error(`unstable: ${JSON.stringify(input)}`);
     }
+  });
+});
+
+describe("directiveInfo", () => {
+  const find = (node: any, name: string): any =>
+    node.name === name ? node : (node.children ?? []).map((child: any) => find(child, name)).find(Boolean);
+  const attrsOf = (markdown: string, name: string) => directiveInfo(find(markdownToMdast(markdown), name)).attrs;
+
+  test.each([
+    ["table", ":::::table{layout=wide width=80 numbered colwidths=100,200}\n::::row\n:::cell\nx\n:::\n::::\n:::::", { layout: "wide", width: 80, numbered: true, colwidths: [100, 200] }],
+    ["cell", ":::cell{header colspan=2 bg=#fff colwidth=50,60}\nx\n:::", { header: true, colspan: 2, bg: "#fff", colwidth: [50, 60] }],
+    ["panel", ":::panel{type=info iconText=!}\nx\n:::", { type: "info", iconText: "!" }],
+    ["column", "::::layout\n:::column{width=50}\nx\n:::\n::::", { width: 50 }],
+    ["macro", "::macro{key=toc type=com.x params='{\"a\":1}'}", { key: "toc", type: "com.x", params: { a: 1 } }],
+    ["media", "::media[a.png]{_id=1 width=10 layout=center}", { _id: "1", width: 10, layout: "center" }],
+    ["marks", ":::marks{align=center indent=2}\nx\n:::", { align: "center", indent: 2 }],
+    ["span", ":span[x]{color=#f00 underline sup}", { color: "#f00", underline: true, sup: true }],
+    ["card", "::card[https://x.y]{appearance=embed originalWidth=3}", { appearance: "embed", originalWidth: 3 }],
+    ["status", "a :status[ok]{color=green}", { color: "green" }],
+    ["taskThing", ":::taskThing{adf='{\"state\":\"DONE\"}'}\nx\n:::", { state: "DONE" }],
+  ])("%s", (name, markdown, expected) => {
+    expect(attrsOf(markdown as string, name as string)).toMatchObject(expected as object);
   });
 });

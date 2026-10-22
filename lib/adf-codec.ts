@@ -12,7 +12,7 @@ import { decodeMediaPlaceholder, encodePlaceholder, type AdfNode } from "./markd
 
 type Mark = NonNullable<AdfNode["marks"]>[number];
 type Attrs = Record<string, unknown>;
-type Directive = LeafDirective | ContainerDirective | TextDirective;
+export type Directive = LeafDirective | ContainerDirective | TextDirective;
 type Context = { source: string; warnings: string[]; ids: number };
 type Wrapper = { key: string; make: (children: PhrasingContent[]) => PhrasingContent };
 
@@ -538,9 +538,13 @@ const writeOptions: ToMarkdownOptions = {
   resourceLink: true,
 };
 
+export function adfToMdast(adf: AdfNode | null | undefined): Root {
+  return { type: "root", children: blocksToMdast(adf?.content) };
+}
+
 export function adfToEditMarkdown(adf: AdfNode | null | undefined): string {
   if (!adf) return "";
-  const root: Root = { type: "root", children: blocksToMdast(adf.content) };
+  const root = adfToMdast(adf);
   // The parser drops a leading byte order mark, so it is written as a character reference.
   return toMarkdown(root, writeOptions).replace(/\n+$/, "").replace(/^\uFEFF/, "&#xFEFF;");
 }
@@ -899,6 +903,37 @@ function tableDirective(node: ContainerDirective, ctx: Context): AdfNode | undef
 
 const keysOf = (spec: AttrSpec) => Object.values(spec).map(([key]) => key);
 
+const kindsOf = (...specs: AttrSpec[]): Record<string, Kind> => Object.fromEntries(specs.flatMap((spec) => Object.values(spec)));
+const DIRECTIVE_KINDS: Record<string, Record<string, Kind>> = {
+  table: { ...kindsOf(TABLE_ATTRS), colwidths: "numbers" },
+  cell: { ...kindsOf(CELL_ATTRS), header: "flag" },
+  macro: kindsOf(MACRO_ATTRS),
+  media: kindsOf(MEDIA_ATTRS, BORDER_ATTRS, SINGLE_ATTRS),
+  marks: kindsOf(...Object.values(BLOCK_MARKS)),
+  span: { color: "string", bg: "string", underline: "flag", sub: "flag", sup: "flag", annotation: "string", marks: "json" },
+  date: { timestamp: "string" },
+  ...Object.fromEntries(CONTAINERS.map((spec) => [spec.name, kindsOf(spec.attrs)])),
+  ...Object.fromEntries(
+    DEDICATED.map((spec) => [spec.name, Object.fromEntries(Object.entries(spec.attrs).map(([name, kind]) => [markdownName(name), kind]))])
+  ),
+};
+
+/** A directive's attributes decoded by the spec tables above; a generic directive's `adf` is spread into the result. */
+export function directiveInfo(node: Directive): { name: string; attrs: Record<string, unknown> } {
+  const kinds = DIRECTIVE_KINDS[node.name] ?? {};
+  const attrs: Attrs = {};
+  for (const [key, value] of Object.entries(node.attributes ?? {})) {
+    if (key === "adf") {
+      Object.assign(attrs, asObject(parseJson(value)));
+      continue;
+    }
+    const kind = key === "inline" ? "flag" : kinds[key];
+    const decoded = kind === "json" ? parseJson(value) : kind && decodeAttr(value, kind);
+    attrs[key] = decoded === undefined ? value : decoded;
+  }
+  return { name: node.name, attrs };
+}
+
 /** The attributes split over the media, border and (for a mediaSingle) mediaSingle specs; a key in none of them, or no media attribute, is not a media. */
 function mediaFromDirective(node: LeafDirective | TextDirective, kind: "mediaSingle" | "media" | "mediaInline", ctx: Context): AdfNode | undefined {
   const attributes = node.attributes ?? {};
@@ -1027,6 +1062,15 @@ function blocksFromMdast(nodes: RootContent[], ctx: Context): AdfNode[] {
       return [{ type: "paragraph", content: textNode(sourceOf(node, ctx), []) }];
     }
   });
+}
+
+/** Never throws: unparseable markdown becomes a paragraph of its source text. */
+export function markdownToMdast(markdown: string): Root {
+  try {
+    return fromMarkdown(markdown, readOptions);
+  } catch {
+    return { type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: markdown }] }] };
+  }
 }
 
 /** Never throws: what cannot be mapped becomes a paragraph of its source text, with a warning. */

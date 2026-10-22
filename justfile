@@ -37,3 +37,7 @@ clear-cache:
 # Round-trip every cached rich-text field through the markdown codec
 verify-roundtrip *args:
     bun run eval/roundtrip.ts {{args}}
+
+# Render every cached rich-text field to the terminal and check the output
+verify-render *args:
+    bun run eval/render.ts {{args}}
