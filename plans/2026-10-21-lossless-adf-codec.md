@@ -265,7 +265,7 @@ Exit: exact rate ≥ 99.9% on both samples, with every miss named. Comment no-op
 
 1. Delete the old parser, `preserveUnknown`, the `tikadf:` writer (keep the reader for old markdown files) and any code made redundant.
 2. Add `tik restore KEY [--field F] [--at TS]`: show the diff, then write through the edit flow (R18).
-3. Update `AGENTS.md`, `README.md` and `claude_skill/jira-cli/`: the dialect reference (one table), `--edit-md`, `--replace`, `--force`, `--dry-run` diffs, backups and restore.
+3. Update `AGENTS.md`, `README.md` and `claude_skill/tik/`: the dialect reference (one table), `--edit-md`, `--replace`, `--force`, `--dry-run` diffs, backups and restore.
 4. Decide whether the display writer should become the edit writer with attributes hidden, so there is one codec. This is not required for this goal.
 
 ## Risks and open questions

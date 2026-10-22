@@ -6,7 +6,7 @@ Guidance for Claude Code when working in this repository.
 
 `tik` is a Bun-based Jira CLI. Commands are defined with `citty`, terminal UI is rendered with Ink (React for CLI), reads come from a local SQLite cache (`~/.cache/tik/tickets.db`) and credentials come from 1Password (`op`), cached in `/tmp/tik-creds-<uid>`.
 
-Usage documentation lives in `AGENTS.md` (also printed by `tik --ai`), `README.md` (setup and overview) and, locally, `claude_skill/jira-cli/` (git-ignored). Keep them in sync with any flag or behavior change.
+Usage documentation lives in `AGENTS.md` (also printed by `tik --ai`), `README.md` (setup and overview) and, locally, `claude_skill/tik/` (git-ignored). Keep them in sync with any flag or behavior change.
 
 ## Commands
 

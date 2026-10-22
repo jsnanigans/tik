@@ -87,7 +87,7 @@ Images and attachments are out of scope.
      - with and without the multi-chunk bonus
    - The configurations are swept by temporary overrides in the script, not by new CLI flags.
 9. **Tune and lock:** set the constants from the evaluation results. Record the results table at the end of this plan.
-10. **Docs:** update `README.md` (setup: no Ollama, model download on first `embed sync`), `AGENTS.md` (`embed`, semantic flag, relaxed matching) and `claude_skill/jira-cli/`.
+10. **Docs:** update `README.md` (setup: no Ollama, model download on first `embed sync`), `AGENTS.md` (`embed`, semantic flag, relaxed matching) and `claude_skill/tik/`.
 
 ## Order and parallelism
 
