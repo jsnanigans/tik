@@ -15,7 +15,7 @@ const doc = (...content: AdfNode[]): AdfNode => ({ type: "doc", version: 1, cont
 
 describe("constructs", () => {
   test.each([
-    ["paragraph wraps at the width", "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii", "aaaa bbbb cccc dddd eeee ffff gggg hhhh \niiii"],
+    ["paragraph wraps at the width", "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii", "aaaa bbbb cccc dddd eeee ffff gggg hhhh\niiii"],
     ["h1 has a rule", "# Title", "Title\n═════"],
     ["h2 has a rule", "## Title", "Title\n─────"],
     ["h3 has none", "### Title", "Title"],
@@ -51,6 +51,13 @@ describe("constructs", () => {
     expect(text(`before\n\n${placeholder}\n\nafter`)).toBe("before\n\n▣ a.png\n\nafter");
   });
 
+  test("task items and placeholders written as generic nodes", () => {
+    const item = (state: string, text: string): AdfNode => ({ type: "taskItem", attrs: { localId: "1", state }, content: [{ type: "text", text }] });
+    const tasks = { type: "taskList", attrs: { localId: "2" }, content: [item("DONE", "a"), item("TODO", "b")] } as AdfNode;
+    const placeholder = { type: "paragraph", content: [{ type: "placeholder", attrs: { text: "Type here" } }] } as AdfNode;
+    expect(renderAdf(doc(tasks, placeholder), plain).join("\n")).toBe("[x] a\n[ ] b\n\nType here");
+  });
+
   test("an unknown node renders its text and never throws", () => {
     expect(visible(renderAdf(doc({ type: "mystery", content: [{ type: "paragraph", content: [{ type: "text", text: "inside" }] }] } as AdfNode), plain).join("\n"))).toContain("inside");
   });
@@ -58,7 +65,7 @@ describe("constructs", () => {
 
 describe("layout", () => {
   test("a nested list hangs its wrapped lines", () => {
-    expect(text("- aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii")).toBe("• aaaa bbbb cccc dddd eeee ffff gggg \n  hhhh iiii");
+    expect(text("- aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii")).toBe("• aaaa bbbb cccc dddd eeee ffff gggg\n  hhhh iiii");
   });
 
   test("a quote around a panel nests the prefixes", () => {
@@ -94,6 +101,19 @@ describe("tables", () => {
     expect(lines[1]).toBe("│ wide        │");
     expect(lines.join("\n")).toContain("• x");
     for (const line of lines) expect(stringWidth(line)).toBe(stringWidth(lines[0]));
+  });
+
+  test("an expand and a list nest in a cell", () => {
+    const markdown = ":::::table\n::::row\n:::cell\n:::::expand{title=More}\n- x\n:::::\n:::\n::::\n:::::";
+    expect(text(markdown)).toContain("│ ▾ More");
+  });
+
+  test("colwidths split a table that does not fit", () => {
+    const long = "word ".repeat(12).trim();
+    const rows = `| a | b |\n| - | - |\n| ${long} | ${long} |`;
+    const equal = text(rows).split("\n")[0];
+    const weighted = text(`:::table{colwidths=100,300}\n${rows}\n:::`).split("\n")[0];
+    expect(equal.indexOf("┬")).toBeGreaterThan(weighted.indexOf("┬"));
   });
 
   test("shrinks wide columns to fit and keeps the borders aligned", () => {

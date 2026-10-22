@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-22",
+  "width": 100,
+  "sources": {
+    "jira": {
+      "tested": 18022,
+      "throws": 0,
+      "overWidth": 0,
+      "narrowOverWidth": 0,
+      "leaks": 0,
+      "plainEscapes": 0,
+      "p50Ms": 0.29,
+      "p95Ms": 2.73,
+      "maxMs": 104.56,
+      "okRate": 100,
+      "examples": {
+        "throws": [],
+        "overWidth": [],
+        "narrowOverWidth": [],
+        "leaks": [],
+        "plainEscapes": []
+      }
+    },
+    "confluence": {
+      "tested": 300,
+      "throws": 0,
+      "overWidth": 0,
+      "narrowOverWidth": 0,
+      "leaks": 0,
+      "plainEscapes": 0,
+      "p50Ms": 5.51,
+      "p95Ms": 29.6,
+      "maxMs": 228.7,
+      "okRate": 100,
+      "examples": {
+        "throws": [],
+        "overWidth": [],
+        "narrowOverWidth": [],
+        "leaks": [],
+        "plainEscapes": []
+      }
+    },
+    "comments": {
+      "tested": 1016,
+      "throws": 0,
+      "overWidth": 0,
+      "narrowOverWidth": 0,
+      "leaks": 0,
+      "plainEscapes": 0,
+      "p50Ms": 0.25,
+      "p95Ms": 4.15,
+      "maxMs": 12.6,
+      "okRate": 100,
+      "examples": {
+        "throws": [],
+        "overWidth": [],
+        "narrowOverWidth": [],
+        "leaks": [],
+        "plainEscapes": []
+      }
+    }
+  },
+  "seconds": 52.7
+}

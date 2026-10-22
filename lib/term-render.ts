@@ -74,7 +74,7 @@ const clean = (text: string) => text.replace(/\t/g, "    ").replace(/[\u0000-\u0
 const safeUrl = (url: string) => url.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").replace(/ /g, "%20");
 
 const wrap = (text: string, width: number): string[] =>
-  wrapAnsi(text, Math.max(1, width), { hard: true, trim: false }).split("\n").map((line) => line.replaceAll(NBSP, " "));
+  wrapAnsi(text, Math.max(1, width), { hard: true, trim: true }).split("\n").map((line) => line.replaceAll(NBSP, " "));
 
 const fill = (ctx: Ctx, count: number) => (count > 0 ? ctx.p.paint(" ".repeat(count), ctx.base) : "");
 const dim = (ctx: Ctx, text: string) => ctx.p.paint(text, merge(ctx.base, { dim: true }));
@@ -223,6 +223,8 @@ function directiveInline(node: MNode, ctx: Ctx, style: Style): string {
       return "\n";
     case "empty":
       return "";
+    case "placeholder":
+      return dim(ctx, clean(String(attrs.text ?? "")));
     case "media": {
       const ref = refOfDirective(node, attrs);
       return dim(ctx, placeholderLine(ref).replaceAll(" ", NBSP));
@@ -401,9 +403,30 @@ function directiveBlock(node: MNode, ctx: Ctx, width: number): string[] {
       return mediaBlock(children.flatMap((child) => (child.name === "media" ? [refOfDirective(child, directiveInfo(child as unknown as Directive).attrs)] : [])), ctx, width);
     case "card":
       return card(plainText(children), attrs.appearance === "embed", ctx, width);
+    case "blockCard":
+    case "embedCard":
+      return typeof attrs.url === "string" ? card(attrs.url, name === "embedCard", ctx, width) : genericBlock(node, attrs, ctx, width);
+    case "taskList":
+      return list(taskListOf(node), ctx, width);
+    case "decisionList":
+      return list(taskListOf(node, "decisionItem"), ctx, width, "◆");
     default:
       return genericBlock(node, attrs, ctx, width);
   }
+}
+
+/** A task or decision list written as generic directives, as a list whose items are checked when their `state` is DONE. */
+function taskListOf(node: MNode, itemName = "taskItem"): MNode {
+  const items: MNode[] = [];
+  for (const child of node.children ?? []) {
+    if (child.name === itemName) {
+      const { attrs } = directiveInfo(child as unknown as Directive);
+      items.push({ type: "listItem", checked: itemName === "taskItem" ? attrs.state === "DONE" : null, spread: false, children: child.children ?? [] });
+    } else if (child.name === node.name && items.length > 0) {
+      items.at(-1)!.children!.push(taskListOf(child, itemName));
+    }
+  }
+  return { type: "list", ordered: false, spread: false, children: items };
 }
 
 function genericBlock(node: MNode, attrs: Record<string, unknown>, ctx: Ctx, width: number): string[] {
