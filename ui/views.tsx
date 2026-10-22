@@ -586,6 +586,8 @@ type CommentsViewProps = {
 };
 
 const COMMENT_PREVIEW_LINES = 15;
+/** The 70-cell comment box minus its border and padding. */
+export const COMMENT_BODY_WIDTH = 66;
 
 export function CommentsView({ ticketKey, comments, full }: CommentsViewProps): JSX.Element {
   if (comments.length === 0) {

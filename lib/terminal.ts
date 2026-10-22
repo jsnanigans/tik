@@ -1,4 +1,6 @@
 import { C } from "./colors";
+import type { AdfNode } from "./markdown";
+import { renderAdf, renderMarkdownText, type RenderOptions } from "./term-render";
 
 export function getTerminalWidth(): number {
   return process.stdout.columns || 100;
@@ -56,53 +58,11 @@ export function stripAnsi(str: string): string {
   return str.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-let _markedReady: Promise<(md: string) => string> | null = null;
-
-function getMarked(): Promise<(md: string) => string> {
-  if (!_markedReady) {
-    _markedReady = (async () => {
-      const { marked } = await import("marked");
-      const { markedTerminal } = await import("marked-terminal");
-      marked.use(markedTerminal({ reflowText: true, width: getTerminalWidth() - 4 }));
-      return (md: string) => (marked.parse(md) as string).trimEnd();
-    })();
-  }
-  return _markedReady;
+export async function renderMarkdown(md: string, options?: Partial<RenderOptions>): Promise<string> {
+  return renderMarkdownText(md, options).join("\n");
 }
 
-let _hasGlow: boolean | null = null;
-
-function hasGlow(): boolean {
-  if (_hasGlow === null) {
-    try {
-      const proc = Bun.spawnSync(["which", "glow"]);
-      _hasGlow = proc.exitCode === 0;
-    } catch {
-      _hasGlow = false;
-    }
-  }
-  return _hasGlow;
-}
-
-function renderWithGlow(md: string): string | null {
-  try {
-    const width = getTerminalWidth() - 4;
-    const proc = Bun.spawnSync(["glow", "-s", "dark", "-w", String(width), "-"], {
-      stdin: new TextEncoder().encode(md),
-      env: { ...process.env, CLICOLOR_FORCE: "1", COLORTERM: "truecolor" },
-    });
-    if (proc.exitCode === 0 && proc.stdout.length > 0) {
-      return new TextDecoder().decode(proc.stdout).trimEnd();
-    }
-  } catch {}
-  return null;
-}
-
-export async function renderMarkdown(md: string): Promise<string> {
-  if (hasGlow()) {
-    const result = renderWithGlow(md);
-    if (result !== null) return result;
-  }
-  const render = await getMarked();
-  return render(md);
+/** Renders the ADF when there is one, else the markdown it was derived from. */
+export async function renderRichText(adf: AdfNode | null | undefined, md: string, options?: Partial<RenderOptions>): Promise<string> {
+  return adf ? renderAdf(adf, options).join("\n") : renderMarkdown(md, options);
 }

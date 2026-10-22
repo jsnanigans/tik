@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import { C, abbreviateName, renderMarkdown, jiraWikiToMarkdown } from "../lib";
+import { C, abbreviateName, getTerminalWidth, renderMarkdown, jiraWikiToMarkdown } from "../lib";
 import type { HistoryData } from "../lib";
 import { getStatusColor, formatProjectKey } from "./format";
 
@@ -101,7 +101,7 @@ function formatChangeValue(field: string, value: string | null): string {
 }
 
 async function renderMdSection(label: string, md: string): Promise<string[]> {
-  const rendered = await renderMarkdown(md);
+  const rendered = await renderMarkdown(md, { width: getTerminalWidth() - 6 });
   const lines: string[] = [];
   lines.push(" ");
   lines.push(`  ${C.bold}${label}:${C.reset}`);

@@ -10,6 +10,7 @@ export {
   progressBar,
   stripAnsi,
   renderMarkdown,
+  renderRichText,
 } from "./terminal";
 export { type Credentials, loadCredentials, makeAuthHeader } from "./credentials";
 export { jiraGet, jiraPost, jiraPut, jiraDelete, jiraUpload, resolveMediaId, jiraSearch, jiraSearchPaginated, jiraBulkFetch, jiraBulkChangelog, type BulkChangelogHistory, type PaginatedSearchResult } from "./api";
@@ -26,6 +27,8 @@ export {
   parseIssues,
   parseSprint,
   parseComments,
+  parseCommentBodies,
+  parseIssueAdf,
   parseIssueLinks,
   extractTeam,
 } from "./parser";

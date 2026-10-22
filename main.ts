@@ -12,6 +12,7 @@ import {
   setQuietProgress,
   flushStdout,
   renderMarkdown,
+  renderRichText,
   type Credentials,
   loadCredentials,
   jiraGet,
@@ -31,6 +32,8 @@ import {
   parseIssues,
   parseSprint,
   parseComments,
+  parseCommentBodies,
+  parseIssueAdf,
   parseIssueLinks,
   getObj,
   getStr,
@@ -164,7 +167,7 @@ import {
   type PreviewUrls,
 } from "./lib";
 import { renderStatic } from "./ui/render";
-import { IssueListView, SearchResultsView, SprintGoalsView, SprintView, SprintSummaryView, LinksView, CommentsView, HelpView } from "./ui/views";
+import { IssueListView, SearchResultsView, SprintGoalsView, SprintView, SprintSummaryView, LinksView, CommentsView, COMMENT_BODY_WIDTH, HelpView } from "./ui/views";
 import { TimelineView } from "./ui/timeline";
 import { HistoryView, buildHistoryLines } from "./ui/history";
 import { promptSelect } from "./ui/prompts";
@@ -634,6 +637,7 @@ type FormatIssueOpts = {
 
 async function formatIssue(issue: unknown, pr?: PRData, links?: IssueLinkData[], opts: FormatIssueOpts = {}): Promise<void> {
   const data = parseIssue(issue);
+  const adf = parseIssueAdf(issue);
   const { showDescription, showAC, showTI } = opts;
 
   switch (globalFormat) {
@@ -698,15 +702,15 @@ async function formatIssue(issue: unknown, pr?: PRData, links?: IssueLinkData[],
 
       if (showDescription && data.description) {
         out(`\n${C.bold}## Description${C.reset}\n`);
-        out(await renderMarkdown(data.description));
+        out(await renderRichText(adf.description, data.description));
       }
       if (showAC && data.acceptanceCriteria) {
         out(`\n${C.bold}## Acceptance Criteria${C.reset}\n`);
-        out(await renderMarkdown(data.acceptanceCriteria));
+        out(await renderRichText(adf.acceptanceCriteria, data.acceptanceCriteria));
       }
       if (showTI && data.testingInstructions) {
         out(`\n${C.bold}## Testing Instructions${C.reset}\n`);
-        out(await renderMarkdown(data.testingInstructions));
+        out(await renderRichText(adf.testingInstructions, data.testingInstructions));
       }
       out("");
       return;
@@ -4852,6 +4856,7 @@ const main = defineCommand({
 
         const result = await jiraGet(creds, `/rest/api/3/issue/${key}/comment`);
         let comments = parseComments(result);
+        const bodies = parseCommentBodies(result);
 
         clearLoading();
 
@@ -4894,7 +4899,7 @@ const main = defineCommand({
         const renderedComments = await Promise.all(
           comments.map(async (c) => ({
             ...c,
-            renderedBody: await renderMarkdown(c.body),
+            renderedBody: await renderRichText(bodies.get(c.id), c.body, { width: COMMENT_BODY_WIDTH }),
           }))
         );
         await renderStatic(

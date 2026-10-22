@@ -111,6 +111,18 @@ export function getNested(obj: unknown, ...keys: string[]): string {
   return getStr(current, keys[keys.length - 1]);
 }
 
+export type IssueAdf = { description: AdfNode | null; acceptanceCriteria: AdfNode | null; testingInstructions: AdfNode | null };
+
+/** The rich-text fields as ADF, for display; `IssueData` keeps only their markdown. */
+export function parseIssueAdf(issue: unknown): IssueAdf {
+  const fields = getObj(issue, "fields");
+  return {
+    description: getObj(fields, "description") as AdfNode | null,
+    acceptanceCriteria: getObj(fields, customFields.acceptanceCriteria) as AdfNode | null,
+    testingInstructions: getObj(fields, customFields.testingInstructions) as AdfNode | null,
+  };
+}
+
 export function parseIssue(issue: unknown): IssueData {
   const key = getStr(issue, "key");
   const fields = getObj(issue, "fields");
@@ -132,14 +144,10 @@ export function parseIssue(issue: unknown): IssueData {
   const parentKey = parentObj ? getStr(parentObj, "key") : null;
   const epicName = parentObj ? getStr(getObj(parentObj, "fields"), "summary") : null;
 
-  const descriptionAdf = getObj(fields, "description") as AdfNode | null;
-  const description = descriptionAdf ? adfToMarkdown(descriptionAdf) : null;
-
-  const acAdf = getObj(fields, customFields.acceptanceCriteria) as AdfNode | null;
-  const acceptanceCriteria = acAdf ? adfToMarkdown(acAdf) : null;
-
-  const tiAdf = getObj(fields, customFields.testingInstructions) as AdfNode | null;
-  const testingInstructions = tiAdf ? adfToMarkdown(tiAdf) : null;
+  const adf = parseIssueAdf(issue);
+  const description = adf.description ? adfToMarkdown(adf.description) : null;
+  const acceptanceCriteria = adf.acceptanceCriteria ? adfToMarkdown(adf.acceptanceCriteria) : null;
+  const testingInstructions = adf.testingInstructions ? adfToMarkdown(adf.testingInstructions) : null;
 
   const labelsRaw = getObj(fields, "labels") as string[] | null;
   const labels = Array.isArray(labelsRaw) ? labelsRaw : [];
@@ -224,6 +232,15 @@ export function parseSprint(sprint: unknown): SprintData {
     endDate: getStr(sprint, "endDate"),
     goal: getStr(sprint, "goal") || undefined,
   };
+}
+
+export function parseCommentBodies(result: unknown): Map<string, AdfNode> {
+  const bodies = new Map<string, AdfNode>();
+  for (const comment of (getObj(result, "comments") as unknown[]) || []) {
+    const body = getObj(comment, "body") as AdfNode | null;
+    if (body) bodies.set(getStr(comment, "id"), body);
+  }
+  return bodies;
 }
 
 export function parseComments(result: unknown): CommentData[] {
