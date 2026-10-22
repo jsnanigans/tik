@@ -1,0 +1,14 @@
+===== acceptance criterion bullet =====
+    * criterion
+
+===== testing step =====
+    1. step
+
+===== plain text =====
+text
+
+===== bullets with title =====
+Summary
+
+    * one
+    * two

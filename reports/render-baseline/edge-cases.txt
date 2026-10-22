@@ -1,0 +1,123 @@
+===== snake_case stays literal =====
+call some_snake_case_name and my_var_ here
+
+===== underscore emphasis at word boundary =====
+this is emphasised text
+
+===== star emphasis and strong =====
+em and strong and strong
+
+===== strike and inline code =====
+gone and code
+
+===== link =====
+see the docs (https://example.com/a?b=1)
+
+===== two-space hard break =====
+line one
+line two
+
+===== soft wrap joins with space =====
+line one line two line three
+
+===== trailing whitespace trimmed =====
+text
+
+next
+
+===== headings 1-6 =====
+# a
+
+## b
+
+### c
+
+#### d
+
+##### e
+
+###### f
+
+===== nested bullets =====
+    * a
+        * b
+            * c
+    * d
+
+===== ordered then bullet =====
+    1. a
+    2. b
+
+    * c
+
+===== star bullets =====
+    * a
+    * b
+
+===== ordered start number dropped =====
+    1. a
+    2. b
+
+===== list item with inline marks =====
+    * **bold** then `code` and [l](http://x.y)
+
+===== task list =====
+    * [ ]  [ ] todo
+    * [X]  [X] done
+
+===== fenced code with language =====
+    const a = 1;
+    
+    const b = 2;
+
+===== fenced code without language =====
+    plain
+
+===== empty fenced code =====
+
+
+===== blockquote =====
+    quoted more
+
+===== table with header =====
+[90m┌───[39m[90m┬───┐[39m
+[90m│[39m[31m a [39m[90m│[39m[31m b [39m[90m│[39m
+[90m├───[39m[90m┼───┤[39m
+[90m│[39m 1 [90m│[39m 2 [90m│[39m
+[90m├───[39m[90m┼───┤[39m
+[90m│[39m 3 [90m│[39m 4 [90m│[39m
+[90m└───[39m[90m┴───┘[39m
+
+===== table without separator =====
+| a | b | | 1 | 2 |
+
+===== media placeholder on own line =====
+![image: shot.png](tikmedia:eyJ0eXBlIjoibWVkaWFTaW5nbGUiLCJhdHRycyI6eyJsYXlvdXQiOiJjZW50ZXIiLCJ3
+aWR0aCI6NTB9LCJjb250ZW50IjpbeyJ0eXBlIjoibWVkaWEiLCJhdHRycyI6eyJpZCI6IjBmMWUyZDNjLTExMTEtMjIyMi0z
+MzMzLTQ0NDQ1NTU1NjY2NiIsInR5cGUiOiJmaWxlIiwiY29sbGVjdGlvbiI6ImNvbnRlbnRJZC0xMjM0NSIsImFsdCI6InNo
+b3QucG5nIn19XX0=)
+
+===== media placeholder between text =====
+before
+
+![image: shot.png](tikmedia:eyJ0eXBlIjoibWVkaWFTaW5nbGUiLCJhdHRycyI6eyJsYXlvdXQiOiJjZW50ZXIiLCJ3
+aWR0aCI6NTB9LCJjb250ZW50IjpbeyJ0eXBlIjoibWVkaWEiLCJhdHRycyI6eyJpZCI6IjBmMWUyZDNjLTExMTEtMjIyMi0z
+MzMzLTQ0NDQ1NTU1NjY2NiIsInR5cGUiOiJmaWxlIiwiY29sbGVjdGlvbiI6ImNvbnRlbnRJZC0xMjM0NSIsImFsdCI6InNo
+b3QucG5nIn19XX0=) 
+
+after
+
+===== opaque placeholder =====
+DONE
+
+===== bold inside link text not nested =====
+x (http://a.b)
+
+===== empty input =====
+
+
+===== blank lines only =====
+
+
+===== unbalanced markup stays literal =====
+a * b and `c and [d
