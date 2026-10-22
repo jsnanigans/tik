@@ -1,3 +1,6 @@
+import stringWidth from "string-width";
+import stripAnsi from "strip-ansi";
+
 export type ColorDepth = "truecolor" | "256" | "16" | "none";
 export type Theme = "dark" | "light";
 export type Style = { bold?: boolean; dim?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; fg?: string; bg?: string };
@@ -168,3 +171,9 @@ export function createPainter(depth: ColorDepth, theme: Theme): Painter {
 }
 
 export const hyperlink = (text: string, url: string) => `${ESC}]8;;${url}\x07${text}${ESC}]8;;\x07`;
+
+/** Cells a styled string takes; `string-width` is slow, so plain ASCII, the common case, skips it. */
+export function cellWidth(text: string): number {
+  const plain = stripAnsi(text);
+  return /^[\x20-\x7e]*$/.test(plain) ? plain.length : stringWidth(plain);
+}

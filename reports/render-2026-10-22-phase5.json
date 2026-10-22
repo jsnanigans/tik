@@ -1,0 +1,80 @@
+{
+  "date": "2026-10-22",
+  "width": 100,
+  "sources": {
+    "jira": {
+      "tested": 18024,
+      "throws": 0,
+      "overWidth": 0,
+      "narrowOverWidth": 0,
+      "leaks": 0,
+      "plainEscapes": 0,
+      "p50Ms": 0.2,
+      "p95Ms": 2.24,
+      "maxMs": 122.06,
+      "okRate": 100,
+      "examples": {
+        "throws": [],
+        "overWidth": [],
+        "narrowOverWidth": [],
+        "leaks": [],
+        "plainEscapes": []
+      }
+    },
+    "confluence": {
+      "tested": 300,
+      "throws": 0,
+      "overWidth": 0,
+      "narrowOverWidth": 0,
+      "leaks": 0,
+      "plainEscapes": 0,
+      "p50Ms": 3.81,
+      "p95Ms": 20.05,
+      "maxMs": 177.65,
+      "okRate": 100,
+      "examples": {
+        "throws": [],
+        "overWidth": [],
+        "narrowOverWidth": [],
+        "leaks": [],
+        "plainEscapes": []
+      }
+    },
+    "comments": {
+      "tested": 1016,
+      "throws": 0,
+      "overWidth": 0,
+      "narrowOverWidth": 0,
+      "leaks": 0,
+      "plainEscapes": 0,
+      "p50Ms": 0.09,
+      "p95Ms": 3.21,
+      "maxMs": 9.17,
+      "okRate": 100,
+      "examples": {
+        "throws": [],
+        "overWidth": [],
+        "narrowOverWidth": [],
+        "leaks": [],
+        "plainEscapes": []
+      }
+    }
+  },
+  "fuzz": {
+    "cases": 3000,
+    "widths": [
+      20,
+      40,
+      100
+    ],
+    "throws": 0,
+    "overWidth": 0,
+    "examples": []
+  },
+  "determinism": {
+    "tested": 1900,
+    "repeatable": 1900,
+    "examples": []
+  },
+  "seconds": 51.3
+}

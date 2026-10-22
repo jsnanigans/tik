@@ -1,6 +1,5 @@
 import boxes from "cli-boxes";
 import sliceAnsi from "slice-ansi";
-import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
 import type { Root } from "mdast";
 import { adfToMdast, directiveInfo, markdownToMdast, type Directive } from "./adf-codec";
@@ -8,7 +7,7 @@ import { decodeMediaPlaceholder, type AdfNode } from "./markdown";
 import { headerStyle, renderTable, type TableCell } from "./term-table";
 import {
   BAR, BLUE, CODE_BG, CYAN, PANEL, STATUS,
-  createPainter, detectColorDepth, detectTheme, hyperlink, parseHex, readableOn,
+  cellWidth, createPainter, detectColorDepth, detectTheme, hyperlink, parseHex, readableOn,
   type ColorDepth, type Painter, type Style, type Theme,
 } from "./term-style";
 
@@ -75,8 +74,11 @@ const merge = (a: Style, b: Style): Style => {
 const clean = (text: string) => text.replace(/\t/g, "    ").replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, "");
 const safeUrl = (url: string) => url.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").replace(/ /g, "%20");
 
+/** `wrap-ansi` is slow, so a line that already fits skips it. */
 const wrap = (text: string, width: number): string[] =>
-  wrapAnsi(text, Math.max(1, width), { hard: true, trim: true }).split("\n").map((line) => line.replaceAll(NBSP, " "));
+  text.split("\n").flatMap((line) =>
+    (cellWidth(line) <= width ? [line] : wrapAnsi(line, Math.max(1, width), { hard: true, trim: true }).split("\n")).map((row) => row.replaceAll(NBSP, " "))
+  );
 
 const fill = (ctx: Ctx, count: number) => (count > 0 ? ctx.p.paint(" ".repeat(count), ctx.base) : "");
 const dim = (ctx: Ctx, text: string) => ctx.p.paint(text, merge(ctx.base, { dim: true }));
@@ -347,7 +349,7 @@ function heading(children: MNode[], depth: number, ctx: Ctx, width: number): str
   const style: Style = depth <= 2 ? { bold: true, fg: BLUE } : { bold: true, dim: depth >= 5 };
   const lines = wrap(inline(children, ctx, style), width);
   if (depth > 2) return lines;
-  const rule = (depth === 1 ? "═" : "─").repeat(Math.min(width, Math.max(1, ...lines.map((line) => stringWidth(line)))));
+  const rule = (depth === 1 ? "═" : "─").repeat(Math.min(width, Math.max(1, ...lines.map((line) => cellWidth(line)))));
   return [...lines, ctx.p.paint(rule, merge(ctx.base, { fg: BLUE, dim: true }))];
 }
 
@@ -363,7 +365,7 @@ function list(node: MNode, ctx: Ctx, width: number, glyph?: string): string[] {
       : (glyph ?? (node.ordered ? `${start + index}.`.padStart(numberWidth) : BULLETS[ctx.level % BULLETS.length]));
     const base = item.checked ? merge(ctx.base, { dim: true }) : ctx.base;
     const inner = { ...ctx, base, level: ctx.level + 1 };
-    const markerWidth = stringWidth(marker) + 1;
+    const markerWidth = cellWidth(marker) + 1;
     const body = blocks(item.children ?? [], inner, width - markerWidth, !item.spread);
     return prefixed(body, ctx.p.paint(`${marker} `, merge(ctx.base, glyph ? { fg: BLUE } : {})), fill(ctx, markerWidth));
   });
@@ -377,10 +379,10 @@ function code(node: MNode, ctx: Ctx, width: number): string[] {
   const body = clean(node.value ?? "").split("\n").flatMap((line) => wrapAnsi(line, inner, { hard: true, wordWrap: false, trim: false }).split("\n"));
   const lang = node.lang && /^[\w+#.-]+$/.test(node.lang) ? node.lang : "";
   const row = (text: string, extra: Style = {}) => {
-    const padded = painted ? text + " ".repeat(Math.max(0, inner - stringWidth(text))) : text;
+    const padded = painted ? text + " ".repeat(Math.max(0, inner - cellWidth(text))) : text;
     return ctx.p.paint(` ${padded}${painted ? " " : ""}`, merge(style, extra));
   };
-  const label = lang ? [row(`${" ".repeat(Math.max(0, inner - stringWidth(lang)))}${lang}`, { dim: true })] : [];
+  const label = lang ? [row(`${" ".repeat(Math.max(0, inner - cellWidth(lang)))}${lang}`, { dim: true })] : [];
   return [...label, ...body.map((line) => row(line))];
 }
 
@@ -458,7 +460,7 @@ function panel(children: MNode[], attrs: Record<string, unknown>, ctx: Ctx, widt
   const spec = PANEL[String(attrs.type)];
   const color = typeof attrs.color === "string" && parseHex(attrs.color) ? attrs.color : (spec?.color ?? BAR);
   const icon = [...String(attrs.iconText || spec?.icon || "●")][0];
-  const iconWidth = Math.max(1, stringWidth(icon));
+  const iconWidth = Math.max(1, cellWidth(icon));
   const bar = (text: string) => ctx.p.paint(text, merge(ctx.base, { fg: color }));
   const body = blocks(children, ctx, width - 3 - iconWidth);
   return prefixed(body, `${bar("▎")} ${bar(icon)} `, `${bar("▎")} ${fill(ctx, iconWidth + 1)}`);
@@ -482,7 +484,7 @@ function layout(children: MNode[], ctx: Ctx, width: number): string[] {
     const height = Math.max(...rendered.map((lines) => lines.length));
     const separator = dim(ctx, " │ ");
     return Array.from({ length: height }, (_, row) =>
-      rendered.map((lines, index) => (lines[row] ?? "") + fill(ctx, widths[index] - stringWidth(lines[row] ?? ""))).join(separator).trimEnd()
+      rendered.map((lines, index) => (lines[row] ?? "") + fill(ctx, widths[index] - cellWidth(lines[row] ?? ""))).join(separator).trimEnd()
     );
   }
   return columns.flatMap((column, index) => [...(index > 0 ? ["", dim(ctx, "┈".repeat(width)), ""] : []), ...blocks(column.children ?? [], ctx, width)]);
@@ -493,7 +495,7 @@ function marks(children: MNode[], attrs: Record<string, unknown>, ctx: Ctx, widt
   const inner = Math.max(1, width - indent);
   const align = attrs.align;
   const lines = blocks(children, { ...ctx, images: ctx.images && !align }, inner);
-  const shift = (line: string) => (align === "center" ? Math.floor((inner - stringWidth(line)) / 2) : align === "end" ? inner - stringWidth(line) : 0);
+  const shift = (line: string) => (align === "center" ? Math.floor((inner - cellWidth(line)) / 2) : align === "end" ? inner - cellWidth(line) : 0);
   return lines.map((line) => " ".repeat(indent + Math.max(0, shift(line))) + line);
 }
 
@@ -507,9 +509,9 @@ function card(url: string, embed: boolean, ctx: Ctx, width: number): string[] {
   const box = boxes.round;
   const tag = embed ? " embed" : "";
   const room = Math.max(2, width - 6 - tag.length);
-  const visible = stringWidth(url) > room ? `${sliceAnsi(url, 0, room - 1)}…` : url;
+  const visible = cellWidth(url) > room ? `${sliceAnsi(url, 0, room - 1)}…` : url;
   const text = `→ ${visible}`;
-  const inner = stringWidth(text) + tag.length;
+  const inner = cellWidth(text) + tag.length;
   const link = ctx.o.links ? hyperlink(run(ctx, text, { underline: true, fg: BLUE }), safeUrl(url)) : run(ctx, text, { underline: true, fg: BLUE });
   const edge = (left: string, fillChar: string, right: string) => dim(ctx, left + fillChar.repeat(inner + 2) + right);
   return [
@@ -571,7 +573,7 @@ const LINK_CLOSE = /\x1b\]8;;\x07/g;
 
 /** Safety net for a line wider than the budget; a hyperlink cut in the middle is closed again. */
 function fit(line: string, width: number): string {
-  if (stringWidth(line) <= width) return line;
+  if (cellWidth(line) <= width) return line;
   const cut = sliceAnsi(line, 0, width);
   const unclosed = (cut.match(LINK_OPEN)?.length ?? 0) > (cut.match(LINK_CLOSE)?.length ?? 0);
   return unclosed ? `${cut}\x1b]8;;\x07` : cut;
@@ -583,7 +585,7 @@ export function render(root: Root, partial: Partial<RenderOptions> = {}): string
   const ctx: Ctx = { o, p: createPainter(o.color, o.theme), base: {}, level: 0, images: true };
   const width = Math.max(1, o.width);
   const lines = blocks(root.children as unknown as MNode[], ctx, width).map((line) => (line.includes("\x1b_G") ? line : fit(line, width)));
-  while (lines.length > 0 && stringWidth(lines[lines.length - 1]) === 0) lines.pop();
+  while (lines.length > 0 && cellWidth(lines[lines.length - 1]) === 0) lines.pop();
   return lines;
 }
 

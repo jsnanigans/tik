@@ -1,6 +1,5 @@
-import stringWidth from "string-width";
 import stripAnsi from "strip-ansi";
-import { type Painter, type Style, type Theme, BAR } from "./term-style";
+import { BAR, cellWidth, type Painter, type Style, type Theme } from "./term-style";
 
 export type TableCell = {
   header: boolean;
@@ -32,7 +31,7 @@ const STACK_BELOW = 40;
 const NO_STYLE: Style = {};
 
 const pad = (line: string, width: number, base: Style, painter: Painter, align?: TableCell["align"]) => {
-  const room = Math.max(0, width - stringWidth(line));
+  const room = Math.max(0, width - cellWidth(line));
   const fill = (n: number) => (n > 0 ? painter.paint(" ".repeat(n), base) : "");
   if (align === "right") return fill(room) + line;
   if (align === "center") return fill(Math.floor(room / 2)) + line + fill(room - Math.floor(room / 2));
@@ -78,8 +77,8 @@ function columnWidths(placed: Placed[], cols: number, avail: number, hints?: num
   for (const { cell, col, span } of placed) {
     if (span !== 1) continue;
     const lines = cell.render(MEASURE_WIDTH, NO_STYLE).map(stripAnsi);
-    max[col] = Math.max(max[col], ...lines.map((line) => stringWidth(line)));
-    const word = Math.max(1, ...lines.flatMap((line) => line.split(/\s+/).map((word) => stringWidth(word))));
+    max[col] = Math.max(max[col], ...lines.map((line) => cellWidth(line)));
+    const word = Math.max(1, ...lines.flatMap((line) => line.split(/\s+/).map((word) => cellWidth(word))));
     min[col] = Math.max(min[col], Math.min(word, MAX_MIN_WIDTH));
   }
   const total = (values: number[]) => values.reduce((sum, value) => sum + value, 0);
@@ -110,7 +109,7 @@ function stacked(rows: TableCell[][], headerRow: boolean, input: TableInput): st
     row.forEach((cell, c) => {
       const text = head[c] ? stripAnsi(head[c].render(MEASURE_WIDTH, NO_STYLE).join(" ")).trim().slice(0, labelCap) : "";
       const label = text ? `${text}: ` : "";
-      const labelWidth = stringWidth(label);
+      const labelWidth = cellWidth(label);
       const lines = cell.render(Math.max(1, width - labelWidth), cell.base ?? NO_STYLE);
       if (lines.length === 0) out.push(painter.paint(label, { dim: true }));
       lines.forEach((line, i) => out.push((i === 0 ? painter.paint(label, { dim: true }) : " ".repeat(labelWidth)) + line));
