@@ -11,6 +11,7 @@ A fast Jira CLI for the terminal. Reads come from a local SQLite cache, so they 
 - GitHub PR, review and CI status next to your tickets
 - Ticket, branch, worktree and PR workflow in one command (`tik flow`)
 - Confluence pages (`tik doc`)
+- Rich text shown as Jira shows it: colors, panels, status pills, tables, task lists, and inline PNGs in kitty-graphics terminals
 - `--json` and `--plain` output on every command
 
 ## Requirements
@@ -28,7 +29,7 @@ just install     # builds and copies the binary to ~/.local/bin
 tik sync         # fill the local cache
 ```
 
-Edit `~/.config/tik/config.local.json` for your Jira instance. `jiraBase`, `defaultProject` and `syncProjects` are required; any other command-specific key is named in the error when it is missing. Everything instance-specific lives there: workflow statuses, transition IDs, custom field IDs, teams, project aliases and GitHub repos. `config.example.json` lists every field.
+Edit `~/.config/tik/config.local.json` for your Jira instance. `jiraBase`, `defaultProject` and `syncProjects` are required; any other command-specific key is named in the error when it is missing. Everything instance-specific lives there: workflow statuses, transition IDs, custom field IDs, teams, project aliases and GitHub repos. `config.example.json` lists every field. The optional `terminal` key sets the display: `images` (`auto` or `off`), `maxImageBytes`, `maxImageRows` and `theme` (`dark` or `light`).
 
 ## Usage
 

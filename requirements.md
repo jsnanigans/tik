@@ -163,7 +163,7 @@ For a sample of at least 500 fields chosen to include every construct in the fai
 
 ## 8. Non-goals
 
-- Rendering every ADF construct nicely in the terminal. Display output stays as it is.
+- Rendering every ADF construct nicely in the terminal. This was left out of the codec work and is done by the terminal renderer (`plans/2026-10-22-terminal-renderer.md`).
 - Full CommonMark or GitHub-flavored markdown compliance. The dialect is whatever the codec defines, as long as it is documented and tested.
 - Editing media (images, attachments) beyond preserving what is there.
 - Real-time collaborative editing or conflict resolution. If the ticket changed in Jira between fetch and write, the write is refused with a message (R1 compares the version it started from).

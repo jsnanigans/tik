@@ -18,7 +18,7 @@ just install                # build and copy to ~/.local/bin
 just clear-cache            # drop the cached credentials
 ```
 
-Only the ADF codec has tests (`bun test`; `just verify-roundtrip` measures it on the cache). Verify other changes with `--dry-run` (`create`, `edit`) and read-only commands.
+Only the ADF codec and the terminal renderer have tests (`bun test`; `just verify-roundtrip` and `just verify-render` measure them on the cache). Verify other changes with `--dry-run` (`create`, `edit`) and read-only commands.
 
 ## Layout
 
@@ -38,7 +38,9 @@ Only the ADF codec has tests (`bun test`; `just verify-roundtrip` measures it on
   - `markdown.ts`: ADF (display) and Jira wiki to markdown, `tikmedia:` image placeholders.
   - `history.ts`, `timeline.ts`, `export.ts`: changelog parsing, timeline graph, `tik export` renderer.
   - `confluence.ts`: Confluence pages API for `tik doc`.
-  - `terminal.ts`, `colors.ts`, `util.ts`: width and truncation, progress indicators, ANSI constants (`C`), git helpers, `readFileArg`, `PriorityMap`.
+  - `term-render.ts`, `term-style.ts`, `term-table.ts`: terminal renderer for rich text. Consumes mdast from `adfToMdast` / `markdownToMdast` (decoding directives through `directiveInfo`) and returns width-bounded ANSI lines. Blocks render to `string[]` and containers prefix their children's lines. `just verify-render` runs the corpus.
+  - `kitty.ts`, `term-media.ts`: inline PNGs (capability detection, PNG header, kitty sequences, tmux wrapping, `~/.cache/tik/media`, attachment matching and size cap).
+  - `terminal.ts`, `colors.ts`, `util.ts`: width and truncation, progress indicators, `renderMarkdown` / `renderRichText` / `mediaProviderFor`, ANSI constants (`C`), git helpers, `readFileArg`, `PriorityMap`.
 - `ui/`: Ink components. `render.tsx` (`renderStatic`, `renderInteractive`), `table.tsx` (generic `Table`, `selectable` or parent-controlled `highlightIndex`), `views.tsx`, `history.tsx`, `timeline.tsx`, `triage.tsx`, `prompts.tsx`, `sync.tsx`, `format.ts`.
 
 ## Conventions

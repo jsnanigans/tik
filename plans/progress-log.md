@@ -220,3 +220,39 @@ Property checks (sample of 500): no-op identity 500/500, one sentence edited 408
 - Docs: `AGENTS.md` has the dialect table and the restore description; `README.md` mentions backups and restore; the local skill (`claude_skill/tik/`, git-ignored) has the same table, a `restore` section and a command row.
 - Item 4 (single codec) skipped as instructed.
 - `bun test`: 78 tests (1 new, `lib/backup.test.ts`). `just check` passes.
+
+# Progress log: terminal renderer (2026-10-22)
+
+Branch `feature/terminal-renderer`, one commit per phase. `just verify-render` runs the corpus (about 50 s); reports `reports/render-2026-10-22-phase{1,3,5}.json`. `bun test` is 159 tests, `just check` passes, `just build` works (binary 114.7 MB to 112.5 MB after dropping `marked`, `marked-terminal` and their `cli-highlight` tree).
+
+| Source | Fields | Throws | Over width 100 / 40 | Leaks | ESC in plain | p50 | p95 |
+|---|---|---|---|---|---|---|---|
+| Jira cache | 18,024 | 0 | 0 / 0 | 0 | 0 | 0.20 ms | 2.2 ms |
+| Confluence sample | 300 | 0 | 0 / 0 | 0 | 0 | 3.8 ms | 20 ms |
+| Comment sample | 1,016 | 0 | 0 / 0 | 0 | 0 | 0.09 ms | 3.2 ms |
+
+Fuzz (3,000 random markdown documents at widths 20, 40 and 100): 0 throws, 0 lines over width. Plain output is repeatable on 1,900/1,900 fields.
+
+- Speed: the 5 ms p95 target holds for Jira fields and comments. Confluence pages are about 10x larger (median 15 KB of ADF); their time is proportional to size (`wrap-ansi` is most of it, `adfToMdast` table round trips the rest). A line that already fits skips `wrap-ansi`, which cut the Confluence total by 40%.
+- Phase 0: baseline of the old display in `reports/render-baseline/`. The Ghostty + tmux spike is **not done** (needs your terminal), so direct placement is the only image mode and Unicode placeholders are not built.
+- Phase 1: `adfToMdast`, `markdownToMdast`, `directiveInfo` in the codec (tested against every spec table); `term-style.ts` (depth, theme, contrast clamp), `term-render.ts`, `term-table.ts`. Text from tickets has control characters removed, so ticket content cannot inject escape sequences or end a hyperlink early.
+- Phase 2: `view`, `comments`, `history` use the renderer; `renderMarkdown` keeps its name and is built on it. `grep marked\|glow` over `lib ui main.ts package.json` is empty.
+- Phase 3: tables (colspan, rowspan, `colwidth` proportions, numbered column, labelled-row fallback), layouts (side by side from 100 columns), expands, macros, marks. Generic task and decision lists, block cards and Confluence `placeholder` nodes get a real rendering (they were the most common `‹name›` fallbacks in the corpus).
+- Phase 4: `kitty.ts`, `term-media.ts`, `--images` / `--no-images`, `terminal.*` settings. Run through a pseudo-terminal with `KITTY_WINDOW_ID=1` on BACK-6017: the 608 KB PNG was fetched, cached in `~/.cache/tik/media/`, and printed as 4 KB chunks wrapped for tmux (this shell is inside tmux with passthrough on) followed by 19 reserved rows. Not looked at in a real terminal.
+
+Differences from the plan:
+
+- ADF is read next to `IssueData` (`parseIssueAdf`, `parseCommentBodies`) instead of added to it, because several commands print `IssueData` / `CommentData` as `--json`.
+- Wrapping trims (`wrap-ansi` `trim: true`); with trim off, every wrapped line began with a stray space and broke hanging indents.
+- Glyphs: `ℹ ✔ ⚠ ✖ ☑ ▪ ↗ ▶` are counted as two cells by `string-width` but drawn as one, which misaligns indents, so the renderer uses `ⓘ ✓ ▲ ✘ ☒ ‣ → ►`.
+- No syntax highlighting (`cli-highlight` dropped with `marked-terminal`; the plan allowed it).
+- `doc view` renders the cached markdown: the page cache keeps no ADF, so Confluence layouts, panels and macros show only as far as the old markdown kept them. Caching the ADF (a `body_adf` column) is the follow-up.
+- `comments` prints media placeholders with sizes but no inline images: a direct-placement sequence inside Ink corrupts its layout. The 15-line preview counts lines, which is correct while there are no image blocks.
+- "Idempotence of the plain output" is checked as repeatability; re-reading the plain text as markdown cannot be stable because it drops indentation.
+
+Open, for you:
+
+1. Look at `tik view PMP-1838 -A`, `tik comments` and `tik history` in Ghostty (phase 2 and 3 acceptance).
+2. Run the Ghostty + tmux spike (2x2 PNG, direct placement and Unicode placeholders; scroll, split, detach). Direct placement under tmux does not track scrolling; if placeholders work, they are the follow-up and would also allow images in `comments`.
+3. `tik view` on a ticket with PNGs, one over 2 MB and a `.mov` (phase 4 acceptance).
+4. `just install` not run.

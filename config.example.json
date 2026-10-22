@@ -50,6 +50,12 @@
     "defaultSpace": "ENG",
     "syncSpaces": ["ENG"]
   },
+  "terminal": {
+    "images": "auto",
+    "maxImageBytes": 2097152,
+    "maxImageRows": 20,
+    "theme": "dark"
+  },
   "users": [
     {
       "accountId": "YOUR-ACCOUNT-ID",
