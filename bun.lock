@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "jira-cli",
+      "name": "tik",
       "dependencies": {
         "@huggingface/transformers": "4.3.1",
         "citty": "^0.1.6",
