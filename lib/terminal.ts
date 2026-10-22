@@ -1,6 +1,11 @@
 import { C } from "./colors";
+import { localConfig } from "./config";
 import type { AdfNode } from "./markdown";
-import { renderAdf, renderMarkdownText, type RenderOptions } from "./term-render";
+import { loadCredentials } from "./credentials";
+import { imagesEnabled, type ImageMode } from "./kitty";
+import type { AttachmentData } from "./parser";
+import { createMediaProvider } from "./term-media";
+import { collectMedia, renderAdf, renderMarkdownText, type ImageProvider, type RenderOptions } from "./term-render";
 
 export function getTerminalWidth(): number {
   return process.stdout.columns || 100;
@@ -58,11 +63,38 @@ export function stripAnsi(str: string): string {
   return str.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+const withConfig = (options?: Partial<RenderOptions>): Partial<RenderOptions> => ({ theme: localConfig.terminal?.theme, ...options });
+
 export async function renderMarkdown(md: string, options?: Partial<RenderOptions>): Promise<string> {
-  return renderMarkdownText(md, options).join("\n");
+  return renderMarkdownText(md, withConfig(options)).join("\n");
 }
 
 /** Renders the ADF when there is one, else the markdown it was derived from. */
 export async function renderRichText(adf: AdfNode | null | undefined, md: string, options?: Partial<RenderOptions>): Promise<string> {
-  return adf ? renderAdf(adf, options).join("\n") : renderMarkdown(md, options);
+  return adf ? renderAdf(adf, withConfig(options)).join("\n") : renderMarkdown(md, options);
+}
+
+/**
+ * A provider for the media of `docs`, or null when they have none. `mode` is the command line choice and falls back to the
+ * `terminal.images` setting; `inline` is false where an image cannot be printed (Ink output), leaving only the placeholder notes.
+ */
+export async function mediaProviderFor(
+  docs: (AdfNode | null | undefined)[],
+  key: string,
+  attachments: AttachmentData[],
+  { inline, mode }: { inline: boolean; mode?: ImageMode }
+): Promise<ImageProvider | null> {
+  const refs = docs.flatMap((doc) => (doc ? collectMedia(doc) : []));
+  if (refs.length === 0) return null;
+  const terminal = localConfig.terminal ?? {};
+  return createMediaProvider(refs, {
+    jiraBase: localConfig.jiraBase,
+    key,
+    attachments,
+    images: inline && imagesEnabled(mode ?? terminal.images ?? "auto"),
+    tmux: Boolean(process.env.TMUX),
+    maxBytes: terminal.maxImageBytes,
+    maxRows: terminal.maxImageRows,
+    getCredentials: () => loadCredentials(false),
+  });
 }

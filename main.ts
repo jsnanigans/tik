@@ -13,6 +13,8 @@ import {
   flushStdout,
   renderMarkdown,
   renderRichText,
+  mediaProviderFor,
+  type ImageMode,
   type Credentials,
   loadCredentials,
   jiraGet,
@@ -252,6 +254,8 @@ type OutputFormat = "table" | "json" | "plain";
 
 let globalFormat: OutputFormat = "table";
 let globalShowPR = false;
+/** Set by --images / --no-images; unset leaves the `terminal.images` setting in charge. */
+let globalImages: ImageMode | undefined;
 let globalExpandDone = false;
 let subCommandExecuted = false;
 let globalGrepFilter: RegExp | null = null;
@@ -700,17 +704,19 @@ async function formatIssue(issue: unknown, pr?: PRData, links?: IssueLinkData[],
 
       out(`${C.dim}${Config.jiraBase}/browse/${data.key}${C.reset}`);
 
+      const shown = [showDescription && adf.description, showAC && adf.acceptanceCriteria, showTI && adf.testingInstructions];
+      const images = await mediaProviderFor(shown.filter((doc) => doc !== false), data.key, data.attachments, { inline: true, mode: globalImages });
       if (showDescription && data.description) {
         out(`\n${C.bold}## Description${C.reset}\n`);
-        out(await renderRichText(adf.description, data.description));
+        out(await renderRichText(adf.description, data.description, { images }));
       }
       if (showAC && data.acceptanceCriteria) {
         out(`\n${C.bold}## Acceptance Criteria${C.reset}\n`);
-        out(await renderRichText(adf.acceptanceCriteria, data.acceptanceCriteria));
+        out(await renderRichText(adf.acceptanceCriteria, data.acceptanceCriteria, { images }));
       }
       if (showTI && data.testingInstructions) {
         out(`\n${C.bold}## Testing Instructions${C.reset}\n`);
-        out(await renderRichText(adf.testingInstructions, data.testingInstructions));
+        out(await renderRichText(adf.testingInstructions, data.testingInstructions, { images }));
       }
       out("");
       return;
@@ -3808,6 +3814,7 @@ const main = defineCommand({
     json: { type: "boolean", description: "Output as JSON" },
     plain: { type: "boolean", description: "Output as plain text" },
     pr: { type: "boolean", description: "Show GitHub PR status for each issue" },
+    images: { type: "boolean", description: "Show PNG attachments inline (kitty graphics terminals); --no-images turns them off" },
     "refresh-auth": { type: "boolean", description: "Refresh cached credentials from 1Password" },
     "agent-help": { type: "boolean", alias: "ai", description: "Show detailed help for AI agents (use --ai; -ai parses as -a -i)" },
     version: { type: "boolean", alias: "v", description: "Print tik version" },
@@ -4896,10 +4903,12 @@ const main = defineCommand({
           return;
         }
 
+        const cachedIssue = await getCachedIssue(key);
+        const images = await mediaProviderFor([...bodies.values()], key, cachedIssue ? parseIssue(cachedIssue.raw).attachments : [], { inline: false, mode: globalImages });
         const renderedComments = await Promise.all(
           comments.map(async (c) => ({
             ...c,
-            renderedBody: await renderRichText(bodies.get(c.id), c.body, { width: COMMENT_BODY_WIDTH }),
+            renderedBody: await renderRichText(bodies.get(c.id), c.body, { width: COMMENT_BODY_WIDTH, images }),
           }))
         );
         await renderStatic(
@@ -6218,6 +6227,7 @@ function applyFormat(args: Record<string, unknown>): void {
   else globalFormat = "table";
   setQuietProgress(globalFormat !== "table" || !!args.md);
   globalShowPR = !!args.pr;
+  globalImages = isDisabled(args, "images") ? "off" : args.images === true ? "on" : undefined;
   globalExpandDone = !!args["expand-done"];
   if (typeof args.grep === "string" && args.grep) {
     try { globalGrepFilter = new RegExp(args.grep, "i"); }

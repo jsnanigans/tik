@@ -11,7 +11,9 @@ export {
   stripAnsi,
   renderMarkdown,
   renderRichText,
+  mediaProviderFor,
 } from "./terminal";
+export type { ImageMode } from "./kitty";
 export { type Credentials, loadCredentials, makeAuthHeader } from "./credentials";
 export { jiraGet, jiraPost, jiraPut, jiraDelete, jiraUpload, resolveMediaId, jiraSearch, jiraSearchPaginated, jiraBulkFetch, jiraBulkChangelog, type BulkChangelogHistory, type PaginatedSearchResult } from "./api";
 export {

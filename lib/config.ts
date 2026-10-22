@@ -69,6 +69,13 @@ export type LocalConfig = {
     defaultSpace?: string;
     syncSpaces?: string[];
   };
+  /** Rich text display; images show PNG attachments inline on terminals that speak the kitty graphics protocol. */
+  terminal?: {
+    images?: "auto" | "off";
+    maxImageBytes?: number;
+    maxImageRows?: number;
+    theme?: "dark" | "light";
+  };
 };
 
 export const CONFIG_PATH = join(homedir(), ".config", "tik", "config.local.json");

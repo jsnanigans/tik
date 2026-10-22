@@ -14,8 +14,9 @@ import {
 
 /** A media node found in a document, as an image provider needs it. */
 export type MediaRef = { name: string; id?: string; collection?: string; widthPct?: number; layout?: string };
-/** Returns the lines of an inline image for `ref` at most `width` cells wide, or nothing to fall back to the placeholder line. */
-export type ImageProvider = { render: (ref: MediaRef, width: number) => string[] | undefined };
+/** What is known about a media node: the lines of an inline image at most `width` cells wide, or text to add to its placeholder line. */
+export type MediaDisplay = { lines?: string[]; suffix?: string };
+export type ImageProvider = { render: (ref: MediaRef, width: number) => MediaDisplay | undefined };
 
 export type RenderOptions = { width: number; color: ColorDepth; theme: Theme; links: boolean; images: ImageProvider | null };
 
@@ -36,7 +37,8 @@ type MNode = {
   children?: MNode[];
 };
 
-type Ctx = { o: RenderOptions; p: Painter; base: Style; level: number };
+/** `images` is false where lines are measured or joined side by side, because an image line holds an escape sequence. */
+type Ctx = { o: RenderOptions; p: Painter; base: Style; level: number; images: boolean };
 
 const BULLETS = ["•", "◦", "‣"];
 const NBSP = " ";
@@ -109,7 +111,7 @@ function refsOfAdf(node: AdfNode): MediaRef[] {
   return medias.map((media) => {
     const attrs = media.attrs ?? {};
     return {
-      name: String(attrs.alt || attrs.id || "file"),
+      name: String(attrs.alt || (typeof attrs.id === "string" ? `file ${attrs.id.slice(0, 8)}` : "file")),
       id: typeof attrs.id === "string" ? attrs.id : undefined,
       collection: typeof attrs.collection === "string" ? attrs.collection : undefined,
       widthPct: typeof single?.attrs?.width === "number" ? single.attrs.width : undefined,
@@ -121,7 +123,7 @@ function refsOfAdf(node: AdfNode): MediaRef[] {
 function refOfDirective(node: MNode, attrs: Record<string, unknown>): MediaRef {
   const label = plainText(node.children);
   return {
-    name: label || String(attrs._id || "file"),
+    name: label || (typeof attrs._id === "string" ? `file ${attrs._id.slice(0, 8)}` : "file"),
     id: typeof attrs._id === "string" ? attrs._id : undefined,
     collection: typeof attrs.collection === "string" ? attrs.collection : undefined,
     widthPct: typeof attrs.width === "number" ? attrs.width : undefined,
@@ -132,7 +134,17 @@ function refOfDirective(node: MNode, attrs: Record<string, unknown>): MediaRef {
 const placeholderLine = (ref: MediaRef) => `${MEDIA_ICONS.find(([pattern]) => pattern.test(ref.name))?.[1] ?? "▤"} ${clean(ref.name)}`;
 
 function mediaBlock(refs: MediaRef[], ctx: Ctx, width: number): string[] {
-  return refs.flatMap((ref) => ctx.o.images?.render(ref, width) ?? wrap(dim(ctx, placeholderLine(ref)), width));
+  return refs.flatMap((ref) => {
+    const shown = ctx.o.images?.render(ref, width);
+    if (shown?.lines && ctx.images) return shown.lines;
+    return wrap(dim(ctx, clean(placeholderLine(ref) + (shown?.suffix ? ` · ${shown.suffix}` : ""))), width);
+  });
+}
+
+/** Every media node of a document, for resolving their files before the render. */
+export function collectMedia(node: AdfNode): MediaRef[] {
+  if (BLOCK_MEDIA.has(node.type) || node.type === "media" || node.type === "mediaInline") return refsOfAdf(node);
+  return (node.content ?? []).flatMap(collectMedia);
 }
 
 // ---------- inline ----------
@@ -466,7 +478,7 @@ function layout(children: MNode[], ctx: Ctx, width: number): string[] {
     const available = width - 3 * (columns.length - 1);
     const total = percents.reduce((sum, percent) => sum + percent, 0);
     const widths = percents.map((percent) => Math.max(1, Math.floor((available * percent) / total)));
-    const rendered = columns.map((column, index) => blocks(column.children ?? [], ctx, widths[index]));
+    const rendered = columns.map((column, index) => blocks(column.children ?? [], { ...ctx, images: false }, widths[index]));
     const height = Math.max(...rendered.map((lines) => lines.length));
     const separator = dim(ctx, " │ ");
     return Array.from({ length: height }, (_, row) =>
@@ -479,8 +491,8 @@ function layout(children: MNode[], ctx: Ctx, width: number): string[] {
 function marks(children: MNode[], attrs: Record<string, unknown>, ctx: Ctx, width: number): string[] {
   const indent = Math.max(0, Math.min(Number(attrs.indent) || 0, 6)) * 2;
   const inner = Math.max(1, width - indent);
-  const lines = blocks(children, ctx, inner);
   const align = attrs.align;
+  const lines = blocks(children, { ...ctx, images: ctx.images && !align }, inner);
   const shift = (line: string) => (align === "center" ? Math.floor((inner - stringWidth(line)) / 2) : align === "end" ? inner - stringWidth(line) : 0);
   return lines.map((line) => " ".repeat(indent + Math.max(0, shift(line))) + line);
 }
@@ -543,7 +555,7 @@ function directiveTable(children: MNode[], attrs: Record<string, unknown>, ctx: 
       colspan: Number(cellAttrs.colspan) || 1,
       rowspan: Number(cellAttrs.rowspan) || 1,
       base: cellBase(cellAttrs.bg, cellAttrs.header === true, ctx),
-      render: (w, base) => blocks(cell.children ?? [], { ...ctx, base: merge(ctx.base, base) }, w),
+      render: (w, base) => blocks(cell.children ?? [], { ...ctx, images: false, base: merge(ctx.base, base) }, w),
     }))
   );
   const first = infos[0] ?? [];
@@ -568,7 +580,7 @@ function fit(line: string, width: number): string {
 /** Lines of ANSI text for `root`, none wider than `options.width`. */
 export function render(root: Root, partial: Partial<RenderOptions> = {}): string[] {
   const o = resolveOptions(partial);
-  const ctx: Ctx = { o, p: createPainter(o.color, o.theme), base: {}, level: 0 };
+  const ctx: Ctx = { o, p: createPainter(o.color, o.theme), base: {}, level: 0, images: true };
   const width = Math.max(1, o.width);
   const lines = blocks(root.children as unknown as MNode[], ctx, width).map((line) => (line.includes("\x1b_G") ? line : fit(line, width)));
   while (lines.length > 0 && stringWidth(lines[lines.length - 1]) === 0) lines.pop();
